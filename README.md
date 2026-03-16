@@ -89,13 +89,15 @@ ANTHROPIC_API_KEY=sk-ant-xxxxxxxxxxxxxxxxxxxx
 PORT=3000
 ```
 
-| Variable | Description |
-|---|---|
-| `GITHUB_TOKEN` | GitHub Personal Access Token with `repo` scope |
-| `GITHUB_WEBHOOK_SECRET` | A random string used to verify webhook payloads |
-| `ANTHROPIC_API_KEY` | Your Anthropic API key |
-| `PORT` | Server port (default: `3000`) |
-| `REVIEW_TRIGGER_MODE` | Trigger mode: `auto` (PR events only), `comment` (manual only), or `both` (default) |
+
+| Variable                | Description                                                                         |
+| ----------------------- | ----------------------------------------------------------------------------------- |
+| `GITHUB_TOKEN`          | GitHub Personal Access Token with `repo` scope                                      |
+| `GITHUB_WEBHOOK_SECRET` | A random string used to verify webhook payloads                                     |
+| `ANTHROPIC_API_KEY`     | Your Anthropic API key                                                              |
+| `PORT`                  | Server port (default: `3000`)                                                       |
+| `REVIEW_TRIGGER_MODE`   | Trigger mode: `auto` (PR events only), `comment` (manual only), or `both` (default) |
+
 
 ### 3. Start the server
 
@@ -121,14 +123,16 @@ Copy the `https://` forwarding URL from the ngrok output.
 1. Go to your GitHub repository **Settings** > **Webhooks** > **Add webhook**
 2. Set the following:
 
-| Field | Value |
-|---|---|
-| **Payload URL** | `https://<your-ngrok-url>/webhook/github` |
-| **Content type** | `application/json` |
-| **Secret** | Same value as `GITHUB_WEBHOOK_SECRET` in your `.env` |
-| **Events** | Select **"Pull requests"** AND **"Issue comments"** (for comment triggers) |
 
-3. Click **Add webhook**
+| Field            | Value                                                                      |
+| ---------------- | -------------------------------------------------------------------------- |
+| **Payload URL**  | `https://<your-ngrok-url>/webhook/github`                                  |
+| **Content type** | `application/json`                                                         |
+| **Secret**       | Same value as `GITHUB_WEBHOOK_SECRET` in your `.env`                       |
+| **Events**       | Select **"Pull requests"** AND **"Issue comments"** (for comment triggers) |
+
+
+1. Click **Add webhook**
 
 **Trigger Options:**
 
@@ -136,16 +140,18 @@ The bot can be triggered in two ways:
 
 1. **Automatic (Push action)**: Reviews are automatically posted when a PR is opened, synchronized, or reopened
 2. **Manual (Comment trigger)**: Post a comment on any PR containing one of these keywords:
-   - `@review-bot`
-   - `@bot review`
-   - `/review`
+  - `@review-bot`
+  - `@bot review`
+  - `/review`
 
 ### 6. Test it
 
 **Option 1: Automatic trigger**
+
 - Open or update a pull request in the configured repository
 
 **Option 2: Comment trigger**
+
 - Post a comment on any PR with `@review-bot` or `/review`
 
 The bot will post a review with:
@@ -156,10 +162,12 @@ The bot will post a review with:
 
 ## API Endpoints
 
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/webhook/health` | Health check |
+
+| Method | Path              | Description             |
+| ------ | ----------------- | ----------------------- |
+| `GET`  | `/webhook/health` | Health check            |
 | `POST` | `/webhook/github` | GitHub webhook receiver |
+
 
 ## How the AI Review Works
 
