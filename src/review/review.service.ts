@@ -17,8 +17,7 @@ Your review should focus on:
 Severity Levels:
 - **critical**: Security vulnerabilities, data loss risks, critical bugs that will cause crashes or system failures
 - **high**: Major bugs, significant performance issues, missing critical error handling, logic errors
-- **medium**: Moderate issues, code quality problems, potential bugs, minor performance issues
-- **low**: Style issues, minor improvements, suggestions for better practices
+- **medium**: Moderate issues, code quality problems, potential bugs, minor performance issues, style issues, minor improvements
 
 Rules:
 1. Be concise and specific. Reference exact line numbers from the diff.
@@ -36,7 +35,7 @@ Respond ONLY with valid JSON matching this schema:
       "path": "path/to/file.ts",
       "line": 42,
       "body": "Your review comment in markdown",
-      "severity": "critical" | "high" | "medium" | "low"
+      "severity": "critical" | "high" | "medium"
     }
   ]
 }
@@ -135,31 +134,29 @@ export class ReviewService implements OnModuleInit {
         summary: text.slice(0, 2000),
         comments: [],
         event: 'COMMENT',
-        severityCounts: { critical: 0, high: 0, medium: 0, low: 0 },
+        severityCounts: { critical: 0, high: 0, medium: 0 },
       };
     }
   }
 
-  private normalizeSeverity(severity: string): 'critical' | 'high' | 'medium' | 'low' {
+  private normalizeSeverity(severity: string): 'critical' | 'high' | 'medium' {
     const normalized = severity?.toLowerCase?.();
     if (normalized === 'critical') return 'critical';
     if (normalized === 'high') return 'high';
-    if (normalized === 'medium') return 'medium';
-    return 'low';
+    return 'medium';
   }
 
   private calculateSeverityCounts(comments: any[]): {
     critical: number;
     high: number;
     medium: number;
-    low: number;
   } {
     return comments.reduce(
       (counts, comment) => {
         counts[comment.severity]++;
         return counts;
       },
-      { critical: 0, high: 0, medium: 0, low: 0 }
+      { critical: 0, high: 0, medium: 0 }
     );
   }
 
@@ -167,22 +164,21 @@ export class ReviewService implements OnModuleInit {
     critical: number;
     high: number;
     medium: number;
-    low: number;
   }): 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT' {
     if (severityCounts.critical > 0 || severityCounts.high > 0) {
       return 'REQUEST_CHANGES';
     }
-    
-    if (severityCounts.medium > 0 || severityCounts.low > 0) {
+
+    if (severityCounts.medium > 0) {
       return 'COMMENT';
     }
-    
+
     return 'APPROVE';
   }
 
   private buildSummaryWithSeverity(
     summary: string,
-    severityCounts: { critical: number; high: number; medium: number; low: number }
+    severityCounts: { critical: number; high: number; medium: number }
   ): string {
     const total = Object.values(severityCounts).reduce((a, b) => a + b, 0);
     
@@ -201,32 +197,25 @@ export class ReviewService implements OnModuleInit {
     if (severityCounts.medium > 0) {
       severityBreakdown += `🟡 **Medium**: ${severityCounts.medium}\n`;
     }
-    if (severityCounts.low > 0) {
-      severityBreakdown += `🟢 **Low**: ${severityCounts.low}\n`;
-    }
 
     const conclusion = this.buildConclusion(severityCounts);
     
     return `${summary}${severityBreakdown}\n${conclusion}`;
   }
 
-  private buildConclusion(severityCounts: { critical: number; high: number; medium: number; low: number }): string {
+  private buildConclusion(severityCounts: { critical: number; high: number; medium: number }): string {
     if (severityCounts.critical > 0) {
       return '**❌ Conclusion**: Changes requested due to **critical** issues that must be addressed.';
     }
-    
+
     if (severityCounts.high > 0) {
       return '**❌ Conclusion**: Changes requested due to **high severity** issues that should be fixed.';
     }
-    
+
     if (severityCounts.medium > 0) {
       return '**💬 Conclusion**: Code is generally good, but consider addressing the medium severity suggestions.';
     }
-    
-    if (severityCounts.low > 0) {
-      return '**💬 Conclusion**: Minor suggestions provided. Feel free to address them or proceed.';
-    }
-    
+
     return '**✅ Conclusion**: Approved! No issues found.';
   }
 }
