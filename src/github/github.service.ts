@@ -107,7 +107,7 @@ export class GithubService implements OnModuleInit {
           path: c.path,
           line: c.line,
           side: c.side,
-          body: c.body,
+          body: this.formatCommentWithSeverity(c.body, c.severity),
         })),
       });
     } catch (error: any) {
@@ -181,16 +181,39 @@ export class GithubService implements OnModuleInit {
     return lines;
   }
 
+  private formatCommentWithSeverity(body: string, severity: string): string {
+    const badges = {
+      critical: '🔴 **CRITICAL**',
+      high: '🟠 **HIGH**',
+      medium: '🟡 **MEDIUM**',
+      low: '🟢 **LOW**',
+    };
+
+    const badge = badges[severity as keyof typeof badges] || '🟢 **LOW**';
+    return `${badge}\n\n${body}`;
+  }
+
   private buildFallbackBody(review: ReviewResult): string {
     let body = review.summary;
 
     if (review.comments.length > 0) {
       body += '\n\n---\n\n### Inline Comments\n\n';
       for (const comment of review.comments) {
-        body += `**\`${comment.path}\`** (line ${comment.line}):\n${comment.body}\n\n`;
+        const severityBadge = this.getSeverityBadge(comment.severity);
+        body += `${severityBadge} **\`${comment.path}\`** (line ${comment.line}):\n${comment.body}\n\n`;
       }
     }
 
     return body;
+  }
+
+  private getSeverityBadge(severity: string): string {
+    const badges = {
+      critical: '🔴 **CRITICAL**',
+      high: '🟠 **HIGH**',
+      medium: '🟡 **MEDIUM**',
+      low: '🟢 **LOW**',
+    };
+    return badges[severity as keyof typeof badges] || '🟢 **LOW**';
   }
 }
