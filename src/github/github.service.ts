@@ -120,13 +120,37 @@ export class GithubService implements OnModuleInit {
         })),
       });
     } catch (error: any) {
-      const isOwnPRError =
+      const isOwnPRCannotRequestChanges =
         error?.status === 422 &&
         typeof error?.message === 'string' &&
         error.message.includes('request changes on your own pull request');
 
-      if (isOwnPRError && review.event === 'REQUEST_CHANGES') {
+      const isOwnPRCannotApprove =
+        error?.status === 422 &&
+        typeof error?.message === 'string' &&
+        error.message.includes('approve your own pull request');
+
+      if (isOwnPRCannotRequestChanges && review.event === 'REQUEST_CHANGES') {
         this.logger.warn('Cannot request changes on own PR. Posting COMMENT instead.');
+        await this.octokit.pulls.createReview({
+          owner,
+          repo,
+          pull_number: prNumber,
+          commit_id: commitSha,
+          body: review.summary,
+          event: 'COMMENT',
+          comments: validComments.map((c) => ({
+            path: c.path,
+            line: c.line,
+            side: c.side,
+            body: this.formatInlineCommentBody(c.body, c.severity),
+          })),
+        });
+        return;
+      }
+
+      if (isOwnPRCannotApprove && review.event === 'APPROVE') {
+        this.logger.warn('Cannot approve own PR. Posting COMMENT instead.');
         await this.octokit.pulls.createReview({
           owner,
           repo,
