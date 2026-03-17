@@ -2,31 +2,32 @@
 
 An automated code review bot that uses **Claude AI** to review GitHub pull requests. Built with **NestJS**, **Octokit**, and the **Anthropic SDK**.
 
-When a pull request is opened or updated, the bot receives a webhook event, fetches the diff, sends it to Claude for analysis, and posts a structured review with inline comments directly on the PR.
+When a pull request is opened or updated, the bot receives a webhook event, fetches the diff, sends it to Claude for analysis, and posts a structured review with file-by-file feedback directly on the PR.
 
 ## Architecture
 
 ```
-GitHub
+GitHub / Manual Request
   │
   │  ┌─ Pull Request Event (opened / synchronize / reopened) [AUTO MODE]
-  │  └─ Issue Comment Event (with trigger keyword) [COMMENT MODE]
+  │  ├─ Issue Comment Event (with trigger keyword) [COMMENT MODE]
+  │  └─ Manual API Call (POST /review/pr with PR URL) [MANUAL MODE]
   ▼
-Webhook Receiver (POST /webhook/github)
+Webhook Receiver (POST /webhook/github) or Review Controller (POST /review/pr)
   │
-  │  verify signature + check trigger mode + fetch PR diff
+  │  verify signature (webhook) / parse PR URL (manual) + fetch PR diff
   ▼
-PR Processor (WebhookService)
+PR Processor (WebhookService / ReviewController)
   │
   │  split changed files + build prompt
   ▼
-LLM Reviewer (Claude API)
+LLM Reviewer (Claude Sonnet 4)
   │
-  │  generate structured review (summary + inline comments)
+  │  generate structured review (summary + file-by-file comments with severity)
   ▼
 GitHub Review API (Octokit)
   │
-  │  post review with inline comments on the PR
+  │  post review with file-by-file feedback on the PR
   ▼
 Done ✓
 ```
@@ -136,13 +137,14 @@ Copy the `https://` forwarding URL from the ngrok output.
 
 **Trigger Options:**
 
-The bot can be triggered in two ways:
+The bot can be triggered in three ways:
 
 1. **Automatic (Push action)**: Reviews are automatically posted when a PR is opened, synchronized, or reopened
 2. **Manual (Comment trigger)**: Post a comment on any PR containing one of these keywords:
-  - `@review-bot`
-  - `@bot review`
-  - `/review`
+   - `@review-bot`
+   - `@bot review`
+   - `/review`
+3. **Manual (API call)**: Send a POST request to `/review/pr` with the PR URL (see API Endpoints section)
 
 ### 6. Test it
 
@@ -154,10 +156,14 @@ The bot can be triggered in two ways:
 
 - Post a comment on any PR with `@review-bot` or `/review`
 
+**Option 3: Manual API call**
+
+- Send a POST request to `/review/pr` with the PR URL (see API Endpoints section below)
+
 The bot will post a review with:
 
 - A **summary** with severity breakdown and conclusion
-- **Inline comments** on specific lines with severity badges (🔴 Critical, 🟠 High, 🟡 Medium)
+- **Review by file** - Comments grouped by file (no inline comments on diff)
 - An **automatic verdict**:
   - `REQUEST_CHANGES` if critical or high severity issues found
   - `APPROVE` if only medium severity issues found (or no issues found)
@@ -184,11 +190,16 @@ This PR adds authentication middleware but has some security concerns.
 *Reviewed by Claude Sonnet 4 🤖*
 ```
 
-**Inline Comments:**
-- 🔴 **CRITICAL** on line 42: "Password is stored in plain text. Must use bcrypt or similar hashing."
-- 🟠 **HIGH** on line 67: "SQL query is vulnerable to injection. Use parameterized queries."
-- 🟠 **HIGH** on line 89: "Missing authentication check before accessing user data."
-- 🟡 **MEDIUM** on line 103: "Error is not logged. Consider adding logging for debugging."
+**Review by File:**
+```
+### `src/auth/middleware.ts`
+- 🔴 **CRITICAL** (line 42): Password is stored in plain text. Must use bcrypt or similar hashing.
+- 🟠 **HIGH** (line 67): SQL query is vulnerable to injection. Use parameterized queries.
+- 🟠 **HIGH** (line 89): Missing authentication check before accessing user data.
+
+### `src/utils/logger.ts`
+- 🟡 **MEDIUM** (line 103): Error is not logged. Consider adding logging for debugging.
+```
 
 ---
 
@@ -210,17 +221,66 @@ This PR improves error handling in the payment module.
 *Reviewed by Claude Sonnet 4 🤖*
 ```
 
-**Inline Comments:**
-- 🟡 **MEDIUM** on line 103: "Error is not logged. Consider adding logging for debugging."
-- 🟡 **MEDIUM** on line 142: "Consider extracting this logic into a separate function for better testability."
+**Review by File:**
+```
+### `src/payment/handler.ts`
+- 🟡 **MEDIUM** (line 103): Error is not logged. Consider adding logging for debugging.
+- 🟡 **MEDIUM** (line 142): Consider extracting this logic into a separate function for better testability.
+```
 
 ## API Endpoints
-
 
 | Method | Path              | Description             |
 | ------ | ----------------- | ----------------------- |
 | `GET`  | `/webhook/health` | Health check            |
 | `POST` | `/webhook/github` | GitHub webhook receiver |
+| `POST` | `/review/pr`      | Manual PR review by URL |
+
+### Manual PR Review
+
+You can manually trigger a review by sending a POST request with a GitHub PR URL:
+
+**Endpoint:** `POST /review/pr`
+
+**Request body:**
+```json
+{
+  "prUrl": "https://github.com/owner/repo/pull/123"
+}
+```
+
+**Example using curl:**
+```bash
+curl -X POST http://localhost:3000/review/pr \
+  -H "Content-Type: application/json" \
+  -d '{"prUrl": "https://github.com/Armakuji/github-pr-review-bot/pull/8"}'
+```
+
+**Example using fetch:**
+```javascript
+fetch('http://localhost:3000/review/pr', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    prUrl: 'https://github.com/Armakuji/github-pr-review-bot/pull/8'
+  })
+});
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Review submitted for PR #8",
+  "pr": "https://github.com/Armakuji/github-pr-review-bot/pull/8",
+  "severityCounts": {
+    "critical": 0,
+    "high": 0,
+    "medium": 2
+  },
+  "event": "APPROVE"
+}
+```
 
 
 ## How the AI Review Works
@@ -272,12 +332,10 @@ The bot automatically determines the review verdict based on severity:
 
 Each review includes:
 - **Summary** with severity breakdown and conclusion
-- **Inline comments** on specific lines with severity badges
+- **Review by file** - Comments grouped by file path (no inline comments on diff)
 - **Automatic verdict** (Approve/Request Changes)
 
-Claude responds with a JSON object that maps directly to GitHub's review API, enabling precise inline comments on the exact lines that need attention.
-
-If any inline comments target invalid diff lines, the bot automatically falls back to posting all feedback as a single summary comment — so no review is ever lost.
+Claude responds with a JSON object containing file paths, line numbers, and feedback. The bot posts all feedback in a single review comment, grouped by file for easy reading.
 
 ## License
 

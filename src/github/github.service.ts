@@ -116,29 +116,51 @@ export class GithubService implements OnModuleInit {
           path: c.path,
           line: c.line,
           side: c.side,
-          body: this.formatCommentWithSeverity(c.body, c.severity),
+          body: this.formatInlineCommentBody(c.body, c.severity),
         })),
       });
     } catch (error: any) {
-      this.logger.error(`Failed to submit review: ${error.message}`);
+      const isOwnPRError =
+        error?.status === 422 &&
+        typeof error?.message === 'string' &&
+        error.message.includes('request changes on your own pull request');
 
-      this.logger.log('Falling back to comment-only review');
-      await this.octokit.pulls.createReview({
-        owner,
-        repo,
-        pull_number: prNumber,
-        commit_id: commitSha,
-        body: this.buildFallbackBody(review),
-        event: 'COMMENT',
-        comments: [],
-      });
+      if (isOwnPRError && review.event === 'REQUEST_CHANGES') {
+        this.logger.warn('Cannot request changes on own PR. Posting COMMENT instead.');
+        await this.octokit.pulls.createReview({
+          owner,
+          repo,
+          pull_number: prNumber,
+          commit_id: commitSha,
+          body: review.summary,
+          event: 'COMMENT',
+          comments: validComments.map((c) => ({
+            path: c.path,
+            line: c.line,
+            side: c.side,
+            body: this.formatInlineCommentBody(c.body, c.severity),
+          })),
+        });
+        return;
+      }
+
+      this.logger.error(`Failed to submit review: ${error?.message || error}`);
+      throw error;
     }
   }
 
-  /**
-   * Validates that comment line numbers exist within the actual PR diff hunks.
-   * GitHub rejects review comments on lines not part of the diff.
-   */
+  private formatInlineCommentBody(body: string, severity: ReviewResult['comments'][number]['severity']): string {
+    const header =
+      severity === 'critical'
+        ? '🔴 **Critical**'
+        : severity === 'high'
+          ? '🟠 **High**'
+          : '🟡 **Medium**';
+
+    // Header on first line so it’s always visible in GitHub UI.
+    return `${header}\n\n${body}`;
+  }
+
   private async filterValidComments(
     owner: string,
     repo: string,
@@ -157,8 +179,7 @@ export class GithubService implements OnModuleInit {
     const diffLinesByFile = new Map<string, Set<number>>();
     for (const file of files) {
       if (!file.patch) continue;
-      const lines = this.parseDiffLines(file.patch);
-      diffLinesByFile.set(file.filename, lines);
+      diffLinesByFile.set(file.filename, this.parseDiffLines(file.patch));
     }
 
     return comments.filter((comment) => {
@@ -188,39 +209,5 @@ export class GithubService implements OnModuleInit {
     }
 
     return lines;
-  }
-
-  private formatCommentWithSeverity(body: string, severity: string): string {
-    const badges = {
-      critical: '🔴 **CRITICAL**',
-      high: '🟠 **HIGH**',
-      medium: '🟡 **MEDIUM**',
-    };
-
-    const badge = badges[severity as keyof typeof badges] || '🟡 **MEDIUM**';
-    return `${badge}\n\n${body}`;
-  }
-
-  private buildFallbackBody(review: ReviewResult): string {
-    let body = review.summary;
-
-    if (review.comments.length > 0) {
-      body += '\n\n---\n\n### Inline Comments\n\n';
-      for (const comment of review.comments) {
-        const severityBadge = this.getSeverityBadge(comment.severity);
-        body += `${severityBadge} **\`${comment.path}\`** (line ${comment.line}):\n${comment.body}\n\n`;
-      }
-    }
-
-    return body;
-  }
-
-  private getSeverityBadge(severity: string): string {
-    const badges = {
-      critical: '🔴 **CRITICAL**',
-      high: '🟠 **HIGH**',
-      medium: '🟡 **MEDIUM**',
-    };
-    return badges[severity as keyof typeof badges] || '🟡 **MEDIUM**';
   }
 }

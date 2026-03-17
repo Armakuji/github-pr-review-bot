@@ -121,7 +121,10 @@ export class ReviewService implements OnModuleInit {
       const event = this.determineReviewEvent(severityCounts);
 
       return {
-        summary: this.buildSummaryWithSeverity(parsed.summary || 'Review completed.', severityCounts),
+        summary: this.buildSummaryWithSeverity(
+          parsed.summary || 'Review completed.',
+          severityCounts,
+        ),
         comments,
         event,
         severityCounts,
