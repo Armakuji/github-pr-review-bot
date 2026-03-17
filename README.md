@@ -32,34 +32,6 @@ GitHub Review API (Octokit)
 Done ✓
 ```
 
-## Project Structure
-
-```
-src/
-├── main.ts                                # App entry point (rawBody enabled)
-├── app.module.ts                          # Root module
-├── config/
-│   └── configuration.ts                   # Environment-based configuration
-├── webhook/
-│   ├── webhook.module.ts
-│   ├── webhook.controller.ts              # POST /webhook/github, GET /webhook/health
-│   ├── webhook.service.ts                 # Review orchestration
-│   ├── guards/
-│   │   └── webhook-signature.guard.ts     # HMAC-SHA256 verification
-│   └── interfaces/
-│       └── webhook-event.interface.ts     # GitHub event payload types
-├── github/
-│   ├── github.module.ts
-│   ├── github.service.ts                  # Octokit: fetch files, submit reviews
-│   └── interfaces/
-│       └── github.interface.ts            # PR file & review types
-└── review/
-    ├── review.module.ts
-    ├── review.service.ts                  # Claude AI integration
-    └── interfaces/
-        └── review.interface.ts            # Review request types
-```
-
 ## Prerequisites
 
 - **Node.js** >= 18
@@ -146,88 +118,6 @@ The bot can be triggered in three ways:
    - `/review`
 3. **Manual (API call)**: Send a POST request to `/review/pr` with the PR URL (see API Endpoints section)
 
-### 6. Test it
-
-**Option 1: Automatic trigger**
-
-- Open or update a pull request in the configured repository
-
-**Option 2: Comment trigger**
-
-- Post a comment on any PR with `@review-bot` or `/review`
-
-**Option 3: Manual API call**
-
-- Send a POST request to `/review/pr` with the PR URL (see API Endpoints section below)
-
-The bot will post a review with:
-
-- A **summary** with severity breakdown and conclusion
-- **Review by file** - Comments grouped by file (no inline comments on diff)
-- An **automatic verdict**:
-  - `REQUEST_CHANGES` if critical or high severity issues found
-  - `APPROVE` if only medium severity issues found (or no issues found)
-
-## Example Review Output
-
-### Example 1: Critical/High Issues (REQUEST_CHANGES)
-
-**Summary:**
-```
-This PR adds authentication middleware but has some security concerns.
-
-## Issue Severity Breakdown
-
-| Severity | Count |
-|----------|-------|
-| 🔴 **Critical** | 1 |
-| 🟠 **High** | 2 |
-| 🟡 **Medium** | 1 |
-
-❌ Conclusion: Changes requested due to critical issues that must be addressed.
-
----
-*Reviewed by Claude Sonnet 4 🤖*
-```
-
-**Review by File:**
-```
-### `src/auth/middleware.ts`
-- 🔴 **CRITICAL** (line 42): Password is stored in plain text. Must use bcrypt or similar hashing.
-- 🟠 **HIGH** (line 67): SQL query is vulnerable to injection. Use parameterized queries.
-- 🟠 **HIGH** (line 89): Missing authentication check before accessing user data.
-
-### `src/utils/logger.ts`
-- 🟡 **MEDIUM** (line 103): Error is not logged. Consider adding logging for debugging.
-```
-
----
-
-### Example 2: Only Medium Issues (APPROVE)
-
-**Summary:**
-```
-This PR improves error handling in the payment module.
-
-## Issue Severity Breakdown
-
-| Severity | Count |
-|----------|-------|
-| 🟡 **Medium** | 2 |
-
-✅ Conclusion: Approved with suggestions. Consider addressing the medium severity recommendations.
-
----
-*Reviewed by Claude Sonnet 4 🤖*
-```
-
-**Review by File:**
-```
-### `src/payment/handler.ts`
-- 🟡 **MEDIUM** (line 103): Error is not logged. Consider adding logging for debugging.
-- 🟡 **MEDIUM** (line 142): Consider extracting this logic into a separate function for better testability.
-```
-
 ## API Endpoints
 
 | Method | Path              | Description             |
@@ -242,44 +132,11 @@ You can manually trigger a review by sending a POST request with a GitHub PR URL
 
 **Endpoint:** `POST /review/pr`
 
-**Request body:**
-```json
-{
-  "prUrl": "https://github.com/owner/repo/pull/123"
-}
-```
-
 **Example using curl:**
 ```bash
 curl -X POST http://localhost:3000/review/pr \
   -H "Content-Type: application/json" \
   -d '{"prUrl": "https://github.com/Armakuji/github-pr-review-bot/pull/8"}'
-```
-
-**Example using fetch:**
-```javascript
-fetch('http://localhost:3000/review/pr', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({
-    prUrl: 'https://github.com/Armakuji/github-pr-review-bot/pull/8'
-  })
-});
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "message": "Review submitted for PR #8",
-  "pr": "https://github.com/Armakuji/github-pr-review-bot/pull/8",
-  "severityCounts": {
-    "critical": 0,
-    "high": 0,
-    "medium": 2
-  },
-  "event": "APPROVE"
-}
 ```
 
 
@@ -295,21 +152,6 @@ The bot uses **Claude Sonnet 4** to analyze PR diffs. The AI is instructed to:
 - Return structured JSON with file paths, line numbers, comments, and severity
 
 Each review includes a footer crediting the AI model used: *"Reviewed by Claude Sonnet 4 🤖"*
-
-### Token Optimization
-
-To reduce API costs and improve performance, the bot:
-
-- **Ignores generated/lock files** (case-insensitive):
-  - `package-lock.json`, `yarn.lock`
-  - Build directories: `dist/`, `build/`, `coverage/`
-  - Minified files: `*.min.js`
-  - Snapshot files: `*.snap`
-  - README files
-- **Filters removed files** - Only reviews added/modified files
-- **Limits to 20 files** - Reviews up to 20 most relevant files per PR
-- **Short comments** - AI generates concise 1-2 sentence feedback
-- **No low severity** - Skips style nitpicks and trivial suggestions
 
 ### Severity Levels
 
@@ -332,10 +174,8 @@ The bot automatically determines the review verdict based on severity:
 
 Each review includes:
 - **Summary** with severity breakdown and conclusion
-- **Review by file** - Comments grouped by file path (no inline comments on diff)
+- **Inline comments** on the PR diff (each comment includes severity)
 - **Automatic verdict** (Approve/Request Changes)
-
-Claude responds with a JSON object containing file paths, line numbers, and feedback. The bot posts all feedback in a single review comment, grouped by file for easy reading.
 
 ## License
 
