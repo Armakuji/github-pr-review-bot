@@ -5,13 +5,7 @@ import {
   PullRequestFile,
   ReviewResult,
 } from './interfaces/github.interface';
-
-const BINARY_EXTENSIONS = new Set([
-  '.png', '.jpg', '.jpeg', '.gif', '.ico', '.svg',
-  '.woff', '.woff2', '.ttf', '.eot',
-  '.zip', '.tar', '.gz', '.pdf',
-  '.lock',
-]);
+import { BINARY_EXTENSIONS, IGNORED_FILES } from '../shared/constants/ignored-files.constant';
 
 @Injectable()
 export class GithubService implements OnModuleInit {
@@ -69,6 +63,8 @@ export class GithubService implements OnModuleInit {
     return data
       .filter((file) => {
         if (!file.patch) return false;
+        const basename = file.filename.split('/').pop()!.toLowerCase();
+        if (IGNORED_FILES.has(basename)) return false;
         const ext = file.filename.substring(file.filename.lastIndexOf('.'));
         return !BINARY_EXTENSIONS.has(ext.toLowerCase());
       })
