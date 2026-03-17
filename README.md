@@ -156,9 +156,35 @@ The bot can be triggered in two ways:
 
 The bot will post a review with:
 
-- A **summary** of the overall PR quality
-- **Inline comments** on specific lines with suggestions
-- A review verdict: `APPROVE`, `REQUEST_CHANGES`, or `COMMENT`
+- A **summary** with severity breakdown and conclusion
+- **Inline comments** on specific lines with severity badges (🔴 Critical, 🟠 High, 🟡 Medium, 🟢 Low)
+- An **automatic verdict**:
+  - `REQUEST_CHANGES` if critical or high severity issues found
+  - `COMMENT` if only medium or low severity issues found
+  - `APPROVE` if no issues found
+
+## Example Review Output
+
+When the bot reviews a PR, it posts a structured comment like this:
+
+**Summary:**
+```
+This PR adds authentication middleware but has some security concerns.
+
+## Issue Severity Breakdown
+
+🔴 **Critical**: 1
+🟠 **High**: 2
+🟡 **Medium**: 1
+
+❌ Conclusion: Changes requested due to critical issues that must be addressed.
+```
+
+**Inline Comments:**
+- 🔴 **CRITICAL** on line 42: "Password is stored in plain text. Must use bcrypt or similar hashing."
+- 🟠 **HIGH** on line 67: "SQL query is vulnerable to injection. Use parameterized queries."
+- 🟠 **HIGH** on line 89: "Missing authentication check before accessing user data."
+- 🟡 **MEDIUM** on line 103: "Error is not logged. Consider adding logging for debugging."
 
 ## API Endpoints
 
@@ -176,7 +202,34 @@ The bot sends each PR's diff to Claude with a system prompt that instructs it to
 - Identify **bugs**, **security vulnerabilities**, and **performance issues**
 - Flag **missing error handling** and **edge cases**
 - Provide **constructive, actionable** feedback
-- Return structured JSON with file paths, line numbers, and comments
+- Categorize issues by **severity level**
+- Return structured JSON with file paths, line numbers, comments, and severity
+
+### Severity Levels
+
+Each issue is categorized into one of four severity levels:
+
+| Severity | Description | Badge |
+|----------|-------------|-------|
+| 🔴 **Critical** | Security vulnerabilities, data loss risks, critical bugs causing crashes/failures | `CRITICAL` |
+| 🟠 **High** | Major bugs, significant performance issues, missing critical error handling | `HIGH` |
+| 🟡 **Medium** | Moderate issues, code quality problems, potential bugs, minor performance issues | `MEDIUM` |
+| 🟢 **Low** | Style issues, minor improvements, suggestions for better practices | `LOW` |
+
+### Automatic Decision Making
+
+The bot automatically determines the review verdict based on severity:
+
+- **REQUEST_CHANGES**: If any **critical** or **high** severity issues are found
+- **COMMENT**: If only **medium** or **low** severity issues are found
+- **APPROVE**: If no issues are found
+
+### Review Format
+
+Each review includes:
+- **Summary** with severity breakdown and conclusion
+- **Inline comments** on specific lines with severity badges
+- **Automatic verdict** (Approve/Request Changes)
 
 Claude responds with a JSON object that maps directly to GitHub's review API, enabling precise inline comments on the exact lines that need attention.
 
