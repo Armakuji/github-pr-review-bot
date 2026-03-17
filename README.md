@@ -160,8 +160,7 @@ The bot will post a review with:
 - **Inline comments** on specific lines with severity badges (🔴 Critical, 🟠 High, 🟡 Medium)
 - An **automatic verdict**:
   - `REQUEST_CHANGES` if critical or high severity issues found
-  - `COMMENT` if only medium severity issues found
-  - `APPROVE` if no issues found
+  - `APPROVE` if only medium severity issues found (or no issues found)
 
 ## Example Review Output
 
@@ -220,8 +219,7 @@ Each issue is categorized into one of three severity levels:
 The bot automatically determines the review verdict based on severity:
 
 - **REQUEST_CHANGES**: If any **critical** or **high** severity issues are found
-- **COMMENT**: If only **medium** severity issues are found
-- **APPROVE**: If no issues are found
+- **APPROVE**: If only **medium** severity issues are found (or no issues are found)
 
 ### Review Format
 
