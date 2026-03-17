@@ -5,7 +5,7 @@ import {
   PullRequestFile,
   ReviewResult,
 } from './interfaces/github.interface';
-import { BINARY_EXTENSIONS, IGNORED_FILES } from '../shared/constants/ignored-files.constant';
+import { BINARY_EXTENSIONS, IGNORE_PATTERNS, MAX_FILES } from '../shared/constants/ignored-files.constant';
 
 @Injectable()
 export class GithubService implements OnModuleInit {
@@ -60,14 +60,27 @@ export class GithubService implements OnModuleInit {
       per_page: 100,
     });
 
-    return data
-      .filter((file) => {
-        if (!file.patch) return false;
-        const basename = file.filename.split('/').pop()!.toLowerCase();
-        if (IGNORED_FILES.has(basename)) return false;
-        const ext = file.filename.substring(file.filename.lastIndexOf('.'));
-        return !BINARY_EXTENSIONS.has(ext.toLowerCase());
-      })
+    const filtered = data.filter((file) => {
+      if (!file.patch) return false;
+      
+      if (file.status === 'removed') return false;
+      
+      if (IGNORE_PATTERNS.some(pattern => pattern.test(file.filename))) {
+        return false;
+      }
+      
+      const ext = file.filename.substring(file.filename.lastIndexOf('.'));
+      return !BINARY_EXTENSIONS.has(ext.toLowerCase());
+    });
+
+    if (filtered.length > MAX_FILES) {
+      this.logger.warn(
+        `PR has ${filtered.length} files. Limiting review to first ${MAX_FILES} files.`
+      );
+    }
+
+    return filtered
+      .slice(0, MAX_FILES)
       .map((file) => ({
         filename: file.filename,
         status: file.status,
