@@ -116,7 +116,7 @@ export class GithubService implements OnModuleInit {
           path: c.path,
           line: c.line,
           side: c.side,
-          body: c.body,
+          body: this.formatInlineCommentBody(c.body, c.severity),
         })),
       });
     } catch (error: any) {
@@ -138,7 +138,7 @@ export class GithubService implements OnModuleInit {
             path: c.path,
             line: c.line,
             side: c.side,
-            body: c.body,
+            body: this.formatInlineCommentBody(c.body, c.severity),
           })),
         });
         return;
@@ -147,6 +147,18 @@ export class GithubService implements OnModuleInit {
       this.logger.error(`Failed to submit review: ${error?.message || error}`);
       throw error;
     }
+  }
+
+  private formatInlineCommentBody(body: string, severity: ReviewResult['comments'][number]['severity']): string {
+    const header =
+      severity === 'critical'
+        ? '🔴 **Critical**'
+        : severity === 'high'
+          ? '🟠 **High**'
+          : '🟡 **Medium**';
+
+    // Header on first line so it’s always visible in GitHub UI.
+    return `${header}\n\n${body}`;
   }
 
   private async filterValidComments(
