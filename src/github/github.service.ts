@@ -186,10 +186,9 @@ export class GithubService implements OnModuleInit {
       critical: '🔴 **CRITICAL**',
       high: '🟠 **HIGH**',
       medium: '🟡 **MEDIUM**',
-      low: '🟢 **LOW**',
     };
 
-    const badge = badges[severity as keyof typeof badges] || '🟢 **LOW**';
+    const badge = badges[severity as keyof typeof badges] || '🟡 **MEDIUM**';
     return `${badge}\n\n${body}`;
   }
 
@@ -212,8 +211,7 @@ export class GithubService implements OnModuleInit {
       critical: '🔴 **CRITICAL**',
       high: '🟠 **HIGH**',
       medium: '🟡 **MEDIUM**',
-      low: '🟢 **LOW**',
     };
-    return badges[severity as keyof typeof badges] || '🟢 **LOW**';
+    return badges[severity as keyof typeof badges] || '🟡 **MEDIUM**';
   }
 }

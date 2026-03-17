@@ -6,7 +6,7 @@ export interface PullRequestFile {
   patch?: string;
 }
 
-export type Severity = 'critical' | 'high' | 'medium' | 'low';
+export type Severity = 'critical' | 'high' | 'medium';
 
 export interface ReviewComment {
   path: string;
@@ -24,6 +24,5 @@ export interface ReviewResult {
     critical: number;
     high: number;
     medium: number;
-    low: number;
   };
 }

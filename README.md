@@ -157,10 +157,10 @@ The bot can be triggered in two ways:
 The bot will post a review with:
 
 - A **summary** with severity breakdown and conclusion
-- **Inline comments** on specific lines with severity badges (🔴 Critical, 🟠 High, 🟡 Medium, 🟢 Low)
+- **Inline comments** on specific lines with severity badges (🔴 Critical, 🟠 High, 🟡 Medium)
 - An **automatic verdict**:
   - `REQUEST_CHANGES` if critical or high severity issues found
-  - `COMMENT` if only medium or low severity issues found
+  - `COMMENT` if only medium severity issues found
   - `APPROVE` if no issues found
 
 ## Example Review Output
@@ -207,21 +207,20 @@ The bot sends each PR's diff to Claude with a system prompt that instructs it to
 
 ### Severity Levels
 
-Each issue is categorized into one of four severity levels:
+Each issue is categorized into one of three severity levels:
 
 | Severity | Description | Badge |
 |----------|-------------|-------|
 | 🔴 **Critical** | Security vulnerabilities, data loss risks, critical bugs causing crashes/failures | `CRITICAL` |
 | 🟠 **High** | Major bugs, significant performance issues, missing critical error handling | `HIGH` |
-| 🟡 **Medium** | Moderate issues, code quality problems, potential bugs, minor performance issues | `MEDIUM` |
-| 🟢 **Low** | Style issues, minor improvements, suggestions for better practices | `LOW` |
+| 🟡 **Medium** | Moderate issues, code quality problems, potential bugs, minor performance issues, style issues, minor improvements | `MEDIUM` |
 
 ### Automatic Decision Making
 
 The bot automatically determines the review verdict based on severity:
 
 - **REQUEST_CHANGES**: If any **critical** or **high** severity issues are found
-- **COMMENT**: If only **medium** or **low** severity issues are found
+- **COMMENT**: If only **medium** severity issues are found
 - **APPROVE**: If no issues are found
 
 ### Review Format
