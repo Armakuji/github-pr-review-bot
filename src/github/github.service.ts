@@ -97,6 +97,13 @@ export class GithubService implements OnModuleInit {
     commitSha: string,
     review: ReviewResult,
   ): Promise<void> {
+    const validComments = await this.filterValidComments(
+      owner,
+      repo,
+      prNumber,
+      review.comments,
+    );
+
     try {
       await this.octokit.pulls.createReview({
         owner,
@@ -105,7 +112,12 @@ export class GithubService implements OnModuleInit {
         commit_id: commitSha,
         body: review.summary,
         event: review.event,
-        comments: [],
+        comments: validComments.map((c) => ({
+          path: c.path,
+          line: c.line,
+          side: c.side,
+          body: c.body,
+        })),
       });
     } catch (error: any) {
       const isOwnPRError =
@@ -114,9 +126,7 @@ export class GithubService implements OnModuleInit {
         error.message.includes('request changes on your own pull request');
 
       if (isOwnPRError && review.event === 'REQUEST_CHANGES') {
-        this.logger.warn(
-          `Cannot request changes on own PR. Posting as comment instead.`
-        );
+        this.logger.warn('Cannot request changes on own PR. Posting COMMENT instead.');
         await this.octokit.pulls.createReview({
           owner,
           repo,
@@ -124,11 +134,68 @@ export class GithubService implements OnModuleInit {
           commit_id: commitSha,
           body: review.summary,
           event: 'COMMENT',
-          comments: [],
+          comments: validComments.map((c) => ({
+            path: c.path,
+            line: c.line,
+            side: c.side,
+            body: c.body,
+          })),
         });
-      } else {
-        throw error;
+        return;
+      }
+
+      this.logger.error(`Failed to submit review: ${error?.message || error}`);
+      throw error;
+    }
+  }
+
+  private async filterValidComments(
+    owner: string,
+    repo: string,
+    prNumber: number,
+    comments: ReviewResult['comments'],
+  ) {
+    if (comments.length === 0) return [];
+
+    const { data: files } = await this.octokit.pulls.listFiles({
+      owner,
+      repo,
+      pull_number: prNumber,
+      per_page: 100,
+    });
+
+    const diffLinesByFile = new Map<string, Set<number>>();
+    for (const file of files) {
+      if (!file.patch) continue;
+      diffLinesByFile.set(file.filename, this.parseDiffLines(file.patch));
+    }
+
+    return comments.filter((comment) => {
+      const validLines = diffLinesByFile.get(comment.path);
+      if (!validLines) return false;
+      return validLines.has(comment.line);
+    });
+  }
+
+  private parseDiffLines(patch: string): Set<number> {
+    const lines = new Set<number>();
+    let currentLine = 0;
+
+    for (const line of patch.split('\n')) {
+      const hunkMatch = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+      if (hunkMatch) {
+        currentLine = parseInt(hunkMatch[1], 10);
+        continue;
+      }
+
+      if (line.startsWith('-')) continue;
+
+      if (line.startsWith('+') || line.startsWith(' ')) {
+        lines.add(currentLine);
+        currentLine++;
       }
     }
+
+    return lines;
   }
 }

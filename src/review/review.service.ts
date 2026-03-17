@@ -124,7 +124,6 @@ export class ReviewService implements OnModuleInit {
         summary: this.buildSummaryWithSeverity(
           parsed.summary || 'Review completed.',
           severityCounts,
-          comments,
         ),
         comments,
         event,
@@ -176,8 +175,7 @@ export class ReviewService implements OnModuleInit {
 
   private buildSummaryWithSeverity(
     summary: string,
-    severityCounts: { critical: number; high: number; medium: number },
-    comments: { path: string; line: number; body: string; severity: string }[]
+    severityCounts: { critical: number; high: number; medium: number }
   ): string {
     const total = Object.values(severityCounts).reduce((a, b) => a + b, 0);
     
@@ -199,41 +197,10 @@ export class ReviewService implements OnModuleInit {
       severityBreakdown += `| 🟡 **Medium** | ${severityCounts.medium} |\n`;
     }
 
-    const fileByFile = this.buildFileByFileComments(comments);
     const conclusion = this.buildConclusion(severityCounts);
     const footer = `\n\n---\n*Reviewed by ${MODEL_DISPLAY_NAME} 🤖*`;
     
-    return `${summary}${severityBreakdown}${fileByFile}\n\n${conclusion}${footer}`;
-  }
-
-  private buildFileByFileComments(comments: { path: string; line: number; body: string; severity: string }[]): string {
-    if (comments.length === 0) return '';
-
-    const byFile = new Map<string, { line: number; body: string; severity: string }[]>();
-    for (const c of comments) {
-      const list = byFile.get(c.path) || [];
-      list.push({ line: c.line, body: c.body, severity: c.severity });
-      byFile.set(c.path, list);
-    }
-
-    let result = '\n\n## Review by File\n\n';
-    for (const [path, items] of byFile) {
-      result += `### \`${path}\`\n\n`;
-      for (const item of items) {
-        const badge = this.getSeverityBadge(item.severity);
-        result += `- ${badge} (line ${item.line}): ${item.body}\n\n`;
-      }
-    }
-    return result;
-  }
-
-  private getSeverityBadge(severity: string): string {
-    const badges = {
-      critical: '🔴 **CRITICAL**',
-      high: '🟠 **HIGH**',
-      medium: '🟡 **MEDIUM**',
-    };
-    return badges[severity as keyof typeof badges] || '🟡 **MEDIUM**';
+    return `${summary}${severityBreakdown}\n${conclusion}${footer}`;
   }
 
   private buildConclusion(severityCounts: { critical: number; high: number; medium: number }): string {
