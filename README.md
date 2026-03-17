@@ -7,22 +7,23 @@ When a pull request is opened or updated, the bot receives a webhook event, fetc
 ## Architecture
 
 ```
-GitHub
+GitHub / Manual Request
   │
   │  ┌─ Pull Request Event (opened / synchronize / reopened) [AUTO MODE]
-  │  └─ Issue Comment Event (with trigger keyword) [COMMENT MODE]
+  │  ├─ Issue Comment Event (with trigger keyword) [COMMENT MODE]
+  │  └─ Manual API Call (POST /review/pr with PR URL) [MANUAL MODE]
   ▼
-Webhook Receiver (POST /webhook/github)
+Webhook Receiver (POST /webhook/github) or Review Controller (POST /review/pr)
   │
-  │  verify signature + check trigger mode + fetch PR diff
+  │  verify signature (webhook) / parse PR URL (manual) + fetch PR diff
   ▼
-PR Processor (WebhookService)
+PR Processor (WebhookService / ReviewController)
   │
   │  split changed files + build prompt
   ▼
-LLM Reviewer (Claude API)
+LLM Reviewer (Claude Sonnet 4)
   │
-  │  generate structured review (summary + inline comments)
+  │  generate structured review (summary + inline comments with severity)
   ▼
 GitHub Review API (Octokit)
   │
@@ -136,13 +137,14 @@ Copy the `https://` forwarding URL from the ngrok output.
 
 **Trigger Options:**
 
-The bot can be triggered in two ways:
+The bot can be triggered in three ways:
 
 1. **Automatic (Push action)**: Reviews are automatically posted when a PR is opened, synchronized, or reopened
 2. **Manual (Comment trigger)**: Post a comment on any PR containing one of these keywords:
-  - `@review-bot`
-  - `@bot review`
-  - `/review`
+   - `@review-bot`
+   - `@bot review`
+   - `/review`
+3. **Manual (API call)**: Send a POST request to `/review/pr` with the PR URL (see API Endpoints section)
 
 ### 6. Test it
 
@@ -153,6 +155,10 @@ The bot can be triggered in two ways:
 **Option 2: Comment trigger**
 
 - Post a comment on any PR with `@review-bot` or `/review`
+
+**Option 3: Manual API call**
+
+- Send a POST request to `/review/pr` with the PR URL (see API Endpoints section below)
 
 The bot will post a review with:
 
@@ -216,11 +222,57 @@ This PR improves error handling in the payment module.
 
 ## API Endpoints
 
-
 | Method | Path              | Description             |
 | ------ | ----------------- | ----------------------- |
 | `GET`  | `/webhook/health` | Health check            |
 | `POST` | `/webhook/github` | GitHub webhook receiver |
+| `POST` | `/review/pr`      | Manual PR review by URL |
+
+### Manual PR Review
+
+You can manually trigger a review by sending a POST request with a GitHub PR URL:
+
+**Endpoint:** `POST /review/pr`
+
+**Request body:**
+```json
+{
+  "prUrl": "https://github.com/owner/repo/pull/123"
+}
+```
+
+**Example using curl:**
+```bash
+curl -X POST http://localhost:3000/review/pr \
+  -H "Content-Type: application/json" \
+  -d '{"prUrl": "https://github.com/Armakuji/github-pr-review-bot/pull/8"}'
+```
+
+**Example using fetch:**
+```javascript
+fetch('http://localhost:3000/review/pr', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    prUrl: 'https://github.com/Armakuji/github-pr-review-bot/pull/8'
+  })
+});
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Review submitted for PR #8",
+  "pr": "https://github.com/Armakuji/github-pr-review-bot/pull/8",
+  "severityCounts": {
+    "critical": 0,
+    "high": 0,
+    "medium": 2
+  },
+  "event": "APPROVE"
+}
+```
 
 
 ## How the AI Review Works
