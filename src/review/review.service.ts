@@ -4,43 +4,41 @@ import Anthropic from '@anthropic-ai/sdk';
 import { ReviewRequest } from './interfaces/review.interface';
 import { ReviewResult } from '../github/interfaces/github.interface';
 
-const SYSTEM_PROMPT = `You are an expert code reviewer. You review GitHub pull request diffs and provide constructive, actionable feedback with severity levels.
+const CLAUDE_MODEL = 'claude-sonnet-4-20250514';
+const MODEL_DISPLAY_NAME = 'Claude Sonnet 4';
 
-Your review should focus on:
-- Bugs and logical errors
+const SYSTEM_PROMPT = `You are an expert code reviewer. Analyze PR diffs and provide concise, actionable feedback.
+
+Focus on:
+- Bugs and logic errors
 - Security vulnerabilities
 - Performance issues
-- Code style and readability
 - Missing error handling
-- Potential race conditions or edge cases
+- Edge cases
 
-Severity Levels:
-- **critical**: Security vulnerabilities, data loss risks, critical bugs that will cause crashes or system failures
-- **high**: Major bugs, significant performance issues, missing critical error handling, logic errors
-- **medium**: Moderate issues, code quality problems, potential bugs, minor performance issues, style issues, minor improvements
+Severity:
+- **critical**: Security flaws, data loss, crashes
+- **high**: Major bugs, performance issues, missing error handling
+- **medium**: Code quality, potential bugs, minor issues
 
 Rules:
-1. Be concise and specific. Reference exact line numbers from the diff.
-2. Only comment on lines that are ADDED or MODIFIED (lines starting with "+" in the diff).
-3. Don't nitpick trivial formatting if it's consistent with the codebase style.
-4. Praise good patterns when you see them.
-5. The "line" field must be the actual line number in the NEW file (shown after the "+" in the @@ hunk header).
-6. Every comment MUST include a severity level.
+1. Keep comments SHORT (1-2 sentences max)
+2. Only comment on ADDED lines (starting with "+")
+3. Line numbers = NEW file line numbers
+4. Skip trivial style issues
 
-Respond ONLY with valid JSON matching this schema:
+Respond ONLY with valid JSON:
 {
-  "summary": "A brief overall assessment of the PR (2-4 sentences)",
+  "summary": "Brief assessment (1-2 sentences)",
   "comments": [
     {
       "path": "path/to/file.ts",
       "line": 42,
-      "body": "Your review comment in markdown",
+      "body": "Short, actionable comment",
       "severity": "critical" | "high" | "medium"
     }
   ]
-}
-
-Use "APPROVE" only if the code is solid. Use "REQUEST_CHANGES" for bugs or security issues. Use "COMMENT" for suggestions and minor improvements.`;
+}`;
 
 @Injectable()
 export class ReviewService implements OnModuleInit {
@@ -63,7 +61,7 @@ export class ReviewService implements OnModuleInit {
     this.logger.log(`Sending ${request.files.length} file(s) for AI review`);
 
     const message = await this.client.messages.create({
-      model: 'claude-sonnet-4-20250514',
+      model: CLAUDE_MODEL,
       max_tokens: 4096,
       messages: [
         {
@@ -131,7 +129,7 @@ export class ReviewService implements OnModuleInit {
     } catch (error: any) {
       this.logger.warn(`Failed to parse AI response: ${error.message}`);
       return {
-        summary: text.slice(0, 2000),
+        summary: `${text.slice(0, 2000)}\n\n---\n*Reviewed by ${MODEL_DISPLAY_NAME} 🤖*`,
         comments: [],
         event: 'COMMENT',
         severityCounts: { critical: 0, high: 0, medium: 0 },
@@ -179,24 +177,27 @@ export class ReviewService implements OnModuleInit {
     const total = Object.values(severityCounts).reduce((a, b) => a + b, 0);
     
     if (total === 0) {
-      return `${summary}\n\n✅ **No issues found** - Code looks good!`;
+      return `${summary}\n\n✅ **No issues found** - Code looks good!\n\n---\n*Reviewed by ${MODEL_DISPLAY_NAME} 🤖*`;
     }
 
     let severityBreakdown = '\n\n## Issue Severity Breakdown\n\n';
+    severityBreakdown += '| Severity | Count |\n';
+    severityBreakdown += '|----------|-------|\n';
     
     if (severityCounts.critical > 0) {
-      severityBreakdown += `🔴 **Critical**: ${severityCounts.critical}\n`;
+      severityBreakdown += `| 🔴 **Critical** | ${severityCounts.critical} |\n`;
     }
     if (severityCounts.high > 0) {
-      severityBreakdown += `🟠 **High**: ${severityCounts.high}\n`;
+      severityBreakdown += `| 🟠 **High** | ${severityCounts.high} |\n`;
     }
     if (severityCounts.medium > 0) {
-      severityBreakdown += `🟡 **Medium**: ${severityCounts.medium}\n`;
+      severityBreakdown += `| 🟡 **Medium** | ${severityCounts.medium} |\n`;
     }
 
     const conclusion = this.buildConclusion(severityCounts);
+    const footer = `\n\n---\n*Reviewed by ${MODEL_DISPLAY_NAME} 🤖*`;
     
-    return `${summary}${severityBreakdown}\n${conclusion}`;
+    return `${summary}${severityBreakdown}\n${conclusion}${footer}`;
   }
 
   private buildConclusion(severityCounts: { critical: number; high: number; medium: number }): string {

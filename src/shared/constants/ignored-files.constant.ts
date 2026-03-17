@@ -5,7 +5,15 @@ export const BINARY_EXTENSIONS = new Set([
   '.lock',
 ]);
 
-export const IGNORED_FILES = new Set([
-  'readme.md',
-  'package-lock.json',
-]);
+export const IGNORE_PATTERNS = [
+  /package-lock\.json$/i,
+  /yarn\.lock$/i,
+  /\.snap$/i,
+  /^dist\//i,
+  /^build\//i,
+  /^coverage\//i,
+  /\.min\.js$/i,
+  /readme\.md$/i,
+];
+
+export const MAX_FILES = 20;

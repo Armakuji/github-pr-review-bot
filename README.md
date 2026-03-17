@@ -164,7 +164,7 @@ The bot will post a review with:
 
 ## Example Review Output
 
-When the bot reviews a PR, it posts a structured comment like this:
+### Example 1: Critical/High Issues (REQUEST_CHANGES)
 
 **Summary:**
 ```
@@ -172,11 +172,16 @@ This PR adds authentication middleware but has some security concerns.
 
 ## Issue Severity Breakdown
 
-🔴 **Critical**: 1
-🟠 **High**: 2
-🟡 **Medium**: 1
+| Severity | Count |
+|----------|-------|
+| 🔴 **Critical** | 1 |
+| 🟠 **High** | 2 |
+| 🟡 **Medium** | 1 |
 
 ❌ Conclusion: Changes requested due to critical issues that must be addressed.
+
+---
+*Reviewed by Claude Sonnet 4 🤖*
 ```
 
 **Inline Comments:**
@@ -184,6 +189,30 @@ This PR adds authentication middleware but has some security concerns.
 - 🟠 **HIGH** on line 67: "SQL query is vulnerable to injection. Use parameterized queries."
 - 🟠 **HIGH** on line 89: "Missing authentication check before accessing user data."
 - 🟡 **MEDIUM** on line 103: "Error is not logged. Consider adding logging for debugging."
+
+---
+
+### Example 2: Only Medium Issues (APPROVE)
+
+**Summary:**
+```
+This PR improves error handling in the payment module.
+
+## Issue Severity Breakdown
+
+| Severity | Count |
+|----------|-------|
+| 🟡 **Medium** | 2 |
+
+✅ Conclusion: Approved with suggestions. Consider addressing the medium severity recommendations.
+
+---
+*Reviewed by Claude Sonnet 4 🤖*
+```
+
+**Inline Comments:**
+- 🟡 **MEDIUM** on line 103: "Error is not logged. Consider adding logging for debugging."
+- 🟡 **MEDIUM** on line 142: "Consider extracting this logic into a separate function for better testability."
 
 ## API Endpoints
 
@@ -196,23 +225,41 @@ This PR adds authentication middleware but has some security concerns.
 
 ## How the AI Review Works
 
-The bot sends each PR's diff to Claude with a system prompt that instructs it to:
+The bot uses **Claude Sonnet 4** to analyze PR diffs. The AI is instructed to:
 
 - Identify **bugs**, **security vulnerabilities**, and **performance issues**
 - Flag **missing error handling** and **edge cases**
 - Provide **constructive, actionable** feedback
 - Categorize issues by **severity level**
+- Keep comments **short and concise** (1-2 sentences)
 - Return structured JSON with file paths, line numbers, comments, and severity
+
+Each review includes a footer crediting the AI model used: *"Reviewed by Claude Sonnet 4 🤖"*
+
+### Token Optimization
+
+To reduce API costs and improve performance, the bot:
+
+- **Ignores generated/lock files** (case-insensitive):
+  - `package-lock.json`, `yarn.lock`
+  - Build directories: `dist/`, `build/`, `coverage/`
+  - Minified files: `*.min.js`
+  - Snapshot files: `*.snap`
+  - README files
+- **Filters removed files** - Only reviews added/modified files
+- **Limits to 20 files** - Reviews up to 20 most relevant files per PR
+- **Short comments** - AI generates concise 1-2 sentence feedback
+- **No low severity** - Skips style nitpicks and trivial suggestions
 
 ### Severity Levels
 
-Each issue is categorized into one of three severity levels:
+The bot categorizes issues into three severity levels:
 
 | Severity | Description | Badge |
 |----------|-------------|-------|
 | 🔴 **Critical** | Security vulnerabilities, data loss risks, critical bugs causing crashes/failures | `CRITICAL` |
 | 🟠 **High** | Major bugs, significant performance issues, missing critical error handling | `HIGH` |
-| 🟡 **Medium** | Moderate issues, code quality problems, potential bugs, minor performance issues, style issues, minor improvements | `MEDIUM` |
+| 🟡 **Medium** | Moderate issues, code quality problems, potential bugs, minor performance issues | `MEDIUM` |
 
 ### Automatic Decision Making
 
