@@ -44,7 +44,8 @@ export class WebhookController {
     }
 
     if (event === 'pull_request') {
-      return this.handlePullRequestEvent(payload as PullRequestEvent);
+      // Only review when explicitly requested via comment command.
+      return { message: 'Ignoring pull_request event (comment-only mode)' };
     }
 
     return { message: `Ignoring event: ${event}` };
@@ -63,14 +64,15 @@ export class WebhookController {
       return { message: 'Ignoring comment on non-PR issue' };
     }
 
-    const triggerKeywords = ['@review-bot', '@bot review', '/review'];
-    const commentBody = payload.comment.body.toLowerCase();
-    const shouldTrigger = triggerKeywords.some(keyword => 
-      commentBody.includes(keyword.toLowerCase())
-    );
+    // Only trigger on explicit command: "@Armakuji /review" (case-insensitive, whitespace-tolerant).
+    const commentBody = payload.comment.body || '';
+    const normalized = commentBody.toLowerCase();
+    const hasMention = normalized.includes('@armakuji');
+    const hasCommand = normalized.includes('/review');
+    const shouldTrigger = hasMention && hasCommand;
 
     if (!shouldTrigger) {
-      return { message: 'Comment does not contain trigger keyword' };
+      return { message: 'Ignoring comment: missing "@Armakuji /review" trigger' };
     }
 
     this.logger.log(
