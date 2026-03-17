@@ -169,10 +169,6 @@ export class ReviewService implements OnModuleInit {
       return 'REQUEST_CHANGES';
     }
 
-    if (severityCounts.medium > 0) {
-      return 'COMMENT';
-    }
-
     return 'APPROVE';
   }
 
@@ -213,7 +209,7 @@ export class ReviewService implements OnModuleInit {
     }
 
     if (severityCounts.medium > 0) {
-      return '**💬 Conclusion**: Code is generally good, but consider addressing the medium severity suggestions.';
+      return '**✅ Conclusion**: Approved with medium severity suggestions. Consider addressing them when possible.';
     }
 
     return '**✅ Conclusion**: Approved! No issues found.';
