@@ -97,14 +97,38 @@ export class GithubService implements OnModuleInit {
     commitSha: string,
     review: ReviewResult,
   ): Promise<void> {
-    await this.octokit.pulls.createReview({
-      owner,
-      repo,
-      pull_number: prNumber,
-      commit_id: commitSha,
-      body: review.summary,
-      event: review.event,
-      comments: [],
-    });
+    try {
+      await this.octokit.pulls.createReview({
+        owner,
+        repo,
+        pull_number: prNumber,
+        commit_id: commitSha,
+        body: review.summary,
+        event: review.event,
+        comments: [],
+      });
+    } catch (error: any) {
+      const isOwnPRError =
+        error?.status === 422 &&
+        typeof error?.message === 'string' &&
+        error.message.includes('request changes on your own pull request');
+
+      if (isOwnPRError && review.event === 'REQUEST_CHANGES') {
+        this.logger.warn(
+          `Cannot request changes on own PR. Posting as comment instead.`
+        );
+        await this.octokit.pulls.createReview({
+          owner,
+          repo,
+          pull_number: prNumber,
+          commit_id: commitSha,
+          body: review.summary,
+          event: 'COMMENT',
+          comments: [],
+        });
+      } else {
+        throw error;
+      }
+    }
   }
 }
