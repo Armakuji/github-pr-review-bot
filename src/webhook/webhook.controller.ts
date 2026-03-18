@@ -65,7 +65,8 @@ export class WebhookController {
     }
 
     // Only trigger on explicit command: "@Armakuji /review" (case-insensitive, whitespace-tolerant).
-    const commentBody = payload.comment.body || '';
+    const commentBody =
+      typeof payload.comment?.body === 'string' ? payload.comment.body : '';
     const normalized = commentBody.toLowerCase();
     const hasMention = normalized.includes('@armakuji');
     const hasCommand = normalized.includes('/review');
