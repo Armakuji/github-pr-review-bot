@@ -10,7 +10,7 @@ import { GithubService } from '../github/github.service';
 import { ReviewService } from './review.service';
 
 interface ReviewPRRequest {
-  prUrl: string;
+  text: string;
 }
 
 @Controller('review')
@@ -23,9 +23,10 @@ export class ReviewController {
   ) {}
 
   @Post('pr')
-  @HttpCode(200)
+  @HttpCode(202)
   async reviewPullRequest(@Body() body: ReviewPRRequest) {
-    const prUrl = typeof body?.prUrl === 'string' ? body.prUrl.trim() : '';
+
+    const prUrl = typeof body?.text === 'string' ? body.text.trim() : '';
 
     if (!prUrl) {
       throw new BadRequestException('prUrl is required and must be a non-empty string');
@@ -35,48 +36,48 @@ export class ReviewController {
 
     this.logger.log(`Manual review requested for ${owner}/${repo} PR #${prNumber}`);
 
-    const prData = await this.githubService.getPullRequest(owner, repo, prNumber);
+    // Fire-and-forget background processing
+    // (Do not await; errors are logged inside)
+    void this.processReviewInBackground(owner, repo, prNumber);
 
-    const files = await this.githubService.getPullRequestFiles(
-      owner,
-      repo,
-      prNumber,
-    );
+    return `🤖 Review queued for PR: https://github.com/${owner}/${repo}/pull/${prNumber}`;
+  }
 
-    if (files.length === 0) {
-      return {
-        success: false,
-        message: `No reviewable files in PR #${prNumber}`,
-      };
+  private async processReviewInBackground(owner: string, repo: string, prNumber: number) {
+    try {
+      const prData = await this.githubService.getPullRequest(owner, repo, prNumber);
+
+      const files = await this.githubService.getPullRequestFiles(owner, repo, prNumber);
+      if (files.length === 0) {
+        this.logger.log(`No reviewable files in PR #${prNumber}`);
+        return;
+      }
+
+      this.logger.log(`Reviewing ${files.length} file(s)...`);
+
+      const reviewResult = await this.reviewService.reviewChanges({
+        prTitle: prData.title,
+        prDescription: prData.body || '',
+        baseBranch: prData.base.ref,
+        headBranch: prData.head.ref,
+        files,
+      });
+
+      await this.githubService.submitReview(
+        owner,
+        repo,
+        prNumber,
+        prData.head.sha,
+        reviewResult,
+      );
+
+      this.logger.log(`Review submitted for PR #${prNumber}`);
+    } catch (error: any) {
+      this.logger.error(
+        `Failed background review for ${owner}/${repo} PR #${prNumber}: ${error?.message || error}`,
+        error?.stack,
+      );
     }
-
-    this.logger.log(`Reviewing ${files.length} file(s)...`);
-
-    const reviewResult = await this.reviewService.reviewChanges({
-      prTitle: prData.title,
-      prDescription: prData.body || '',
-      baseBranch: prData.base.ref,
-      headBranch: prData.head.ref,
-      files,
-    });
-
-    await this.githubService.submitReview(
-      owner,
-      repo,
-      prNumber,
-      prData.head.sha,
-      reviewResult,
-    );
-
-    this.logger.log(`Review submitted for PR #${prNumber}`);
-
-    return {
-      success: true,
-      message: `Review submitted for PR #${prNumber}`,
-      pr: `https://github.com/${owner}/${repo}/pull/${prNumber}`,
-      severityCounts: reviewResult.severityCounts,
-      event: reviewResult.event,
-    };
   }
 
   private parsePullRequestUrl(url: string): {

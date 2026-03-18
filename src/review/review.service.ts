@@ -205,17 +205,40 @@ export class ReviewService implements OnModuleInit {
 
   private buildConclusion(severityCounts: { critical: number; high: number; medium: number }): string {
     if (severityCounts.critical > 0) {
-      return '**❌ Conclusion**: Changes requested due to **critical** issues that must be addressed.';
+      return [
+        '**❌ Conclusion**: REQUEST_CHANGES — critical issues found.',
+        '',
+        '**Next steps**:',
+        '- Fix all **critical** items before merging.',
+      ].join('\n');
     }
 
     if (severityCounts.high > 0) {
-      return '**❌ Conclusion**: Changes requested due to **high severity** issues that should be fixed.';
+      return [
+        '**❌ Conclusion**: REQUEST_CHANGES — high severity issues found.',
+        '',
+        '**Next steps**:',
+        '- Fix all **high** items before merging.',
+      ].join('\n');
     }
 
     if (severityCounts.medium > 0) {
-      return '**✅ Conclusion**: Approved with medium severity suggestions. Consider addressing them when possible.';
+      return [
+        '**✅ Conclusion**: APPROVE — no critical/high issues.',
+        '',
+        `**Notes**: ${severityCounts.medium} medium suggestion(s) included.`,
+        '',
+        '**Recommended**:',
+        '- Address medium items if they’re low effort or in a risky area.',
+        '- If you’re merging now, ensure tests/CI are green and behavior is unchanged.',
+      ].join('\n');
     }
 
-    return '**✅ Conclusion**: Approved! No issues found.';
+    return [
+      '**✅ Conclusion**: APPROVE — no issues found.',
+      '',
+      '**Recommended**:',
+      '- Merge when ready.',
+    ].join('\n');
   }
 }

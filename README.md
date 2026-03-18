@@ -136,7 +136,7 @@ You can manually trigger a review by sending a POST request with a GitHub PR URL
 ```bash
 curl -X POST http://localhost:3000/review/pr \
   -H "Content-Type: application/json" \
-  -d '{"prUrl": "https://github.com/Armakuji/github-pr-review-bot/pull/8"}'
+  -d '{"text": "https://github.com/Armakuji/github-pr-review-bot/pull/8"}'
 ```
 
 
