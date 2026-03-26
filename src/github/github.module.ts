@@ -1,5 +1,5 @@
 import { Module } from '@nestjs/common';
-import { GithubService } from './github.service';
+import { GithubService } from 'src/github/github.service';
 
 @Module({
   providers: [GithubService],

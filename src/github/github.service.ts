@@ -6,13 +6,13 @@ import {
   ReviewResult,
   GithubPullReviewComment,
   GithubIssueComment,
-} from './interfaces/github.interface';
-import { BINARY_EXTENSIONS, IGNORE_PATTERNS, MAX_FILES } from '../shared/constants/ignored-files.constant';
+} from 'src/github/interfaces/github.interface';
+import { BINARY_EXTENSIONS, IGNORE_PATTERNS, MAX_FILES } from 'src/shared/constants/ignored-files.constant';
 import {
   SEVERITY_BADGE_CRITICAL,
   SEVERITY_BADGE_HIGH,
   SEVERITY_BADGE_MEDIUM,
-} from '../shared/constants/severity-badges.constant';
+} from 'src/shared/constants/severity-badges.constant';
 
 @Injectable()
 export class GithubService implements OnModuleInit {

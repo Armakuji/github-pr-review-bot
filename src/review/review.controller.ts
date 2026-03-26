@@ -6,9 +6,9 @@ import {
   BadRequestException,
   Logger,
 } from '@nestjs/common';
-import { GithubService } from '../github/github.service';
-import { ReviewService } from './review.service';
-import { ProtectCommentInput } from './interfaces/protect.interface';
+import { GithubService } from 'src/github/github.service';
+import { ReviewService } from 'src/review/review.service';
+import { ProtectCommentInput } from 'src/review/interfaces/protect.interface';
 
 interface ReviewPRRequest {
   text: string;
