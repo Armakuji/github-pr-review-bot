@@ -1,8 +1,8 @@
 import { Module } from '@nestjs/common';
-import { WebhookController } from './webhook.controller';
-import { WebhookService } from './webhook.service';
-import { GithubModule } from '../github/github.module';
-import { ReviewModule } from '../review/review.module';
+import { WebhookController } from 'src/webhook/webhook.controller';
+import { WebhookService } from 'src/webhook/webhook.service';
+import { GithubModule } from 'src/github/github.module';
+import { ReviewModule } from 'src/review/review.module';
 
 @Module({
   imports: [GithubModule, ReviewModule],

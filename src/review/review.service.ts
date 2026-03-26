@@ -1,115 +1,23 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Anthropic from '@anthropic-ai/sdk';
-import { ReviewRequest } from './interfaces/review.interface';
+import { ReviewRequest } from 'src/review/interfaces/review.interface';
 import {
   ProtectAnalysisInput,
   ProtectAnalysisItem,
   ProtectAnalysisResult,
-} from './interfaces/protect.interface';
-import { ReviewResult } from '../github/interfaces/github.interface';
+} from 'src/review/interfaces/protect.interface';
+import { ReviewResult } from 'src/github/interfaces/github.interface';
 import {
   SEVERITY_BADGE_CRITICAL,
   SEVERITY_BADGE_HIGH,
   SEVERITY_BADGE_MEDIUM,
-} from '../shared/constants/severity-badges.constant';
-import { extractFirstJsonObject } from '../shared/utils/extract-json-object.util';
-import { sanitizeForPrompt } from '../shared/utils/prompt-sanitize.util';
-
-const CLAUDE_MODEL = 'claude-sonnet-4-20250514';
-const MODEL_DISPLAY_NAME = 'Claude Sonnet 4';
-
-const SYSTEM_PROMPT = `You are a senior software engineer conducting a thorough pull request review. Your goal is to catch real problems before they reach production and help the author grow.
-
-## What to review
-
-### 🔴 Critical — block merge immediately
-- Security vulnerabilities: injection, insecure deserialization, exposed secrets/tokens, broken auth
-- Data corruption or silent data loss
-- Crashes, panics, or unhandled promise rejections that will reach production
-- Breaking changes in public APIs or contracts with no migration path
-
-### 🟠 High — should fix before merge
-- Incorrect business logic or wrong algorithm
-- Race conditions, deadlocks, or concurrency bugs
-- Missing error handling on I/O, network, or DB calls
-- N+1 queries or obvious O(n²) loops on unbounded data
-- Null/undefined dereferences that tests would miss
-- Missing input validation on user-controlled data
-
-### 🟡 Medium — fix if feasible, else track
-- Code that is hard to read or maintain and will grow into a bug
-- Inadequate test coverage for the changed logic
-- Misleading variable/function names that create future confusion
-- Duplicated logic that belongs in a shared helper
-- Unnecessary complexity (over-engineering or under-engineering)
-
-## Rules
-1. Only comment on ADDED lines (starting with "+" in the diff).
-2. Line numbers must be the new file line numbers (after the change).
-3. Each comment must: (a) state the problem and risk in 1–3 sentences, then (b) **how to fix with code** whenever a concrete fix is possible.
-4. **Prefer GitHub suggestion blocks** for fixes that replace specific line(s) at the comment position (see below). If a suggestion is not possible (refactor spans files, needs new files, or is architectural), end the comment with a short **fenced code example** in the right language (e.g. \`\`\`ts ... \`\`\`) showing the intended fix or API shape — not pseudocode unless unavoidable.
-5. Do NOT comment on formatting, whitespace, or purely stylistic preferences.
-6. Do NOT repeat the same issue across multiple files — flag it once on the worst instance.
-7. If there are no issues, say so clearly in summary and set comments to [].
-
-## How to write a suggestion block
-Place this markdown inside the "body" field immediately after your explanation:
-
-\`\`\`suggestion
-<replacement line(s) here>
-\`\`\`
-
-The block must contain the full replacement for the line(s) at the commented position. Do not include the leading "+" from the diff. If the fix spans multiple lines, include all of them inside a single block. If a fix is too complex or spans non-contiguous areas, use a fenced code block with a minimal example instead.
-
-## Summary — What's Good
-In JSON, the field **whatsGood** is shown on the PR as a **"What's Good ✅"** section. Always provide **2–5** genuine positives as markdown bullet lines (each line starts with "- "). Examples: clear structure, good edge-case handling, tests, naming, security-conscious choices. If the PR is too small for many positives, still include at least **1** honest bullet.
-
-## Output format
-Respond ONLY with valid JSON — no markdown fences, no prose outside the JSON:
-{
-  "summary": "2–4 sentence overall assessment: what the PR does, general quality, and the most important concern if any",
-  "whatsGood": "- First genuine positive\\n- Second genuine positive",
-  "comments": [
-    {
-      "path": "path/to/file.ts",
-      "line": 42,
-      "body": "Concise explanation of the problem and risk.\\n\\n\`\`\`suggestion\\nconst value = input ?? defaultValue;\\n\`\`\`",
-      "severity": "critical" | "high" | "medium"
-    }
-  ]
-}`;
-
-const PROTECT_SYSTEM_PROMPT = `You evaluate **other people's** comments on a pull request (human or bot reviewers, Copilot, etc.) from the **author's side**.
-
-## Your job
-- For each comment, decide if it is **fair and useful** (good-faith, technically sound, proportional) or deserves **pushback** (wrong, misleading, empty nitpick, generic AI slop, overconfident, or based on a wrong reading of the code).
-- If the comment is **acceptable**, leave it alone: stance "accept", reply_body null.
-- If it deserves **pushback**, stance "pushback" and write a short reply that:
-  - Corrects the record with facts and reasoning;
-  - Stays professional — no insults, no harassment;
-  - Can be confident and slightly witty (the author wants to "fight back" on substance, not flame wars);
-  - Keeps markdown suitable for GitHub (short paragraphs, optional bullet points).
-
-## Rules
-1. Only output entries for comments listed in the user message — one per comment id.
-2. Do not invent new comment ids.
-3. If unsure, prefer "accept" — only push back when you have a clear technical reason.
-4. reply_body must be null when stance is "accept".
-
-## Output format
-Respond ONLY with valid JSON — no markdown fences, no prose outside the JSON:
-{
-  "items": [
-    {
-      "kind": "review" | "issue",
-      "id": 12345,
-      "stance": "accept" | "pushback",
-      "reply_body": "markdown reply or null"
-    }
-  ]
-}`;
-
+} from 'src/shared/constants/severity-badges.constant';
+import { CLAUDE_MODEL, MODEL_DISPLAY_NAME } from 'src/shared/constants/claude-model.constant';
+import { REVIEW_SYSTEM_PROMPT } from 'src/shared/constants/review-system-prompt.constant';
+import { PROTECT_SYSTEM_PROMPT } from 'src/shared/constants/protect-system-prompt.constant';
+import { extractFirstJsonObject } from 'src/shared/utils/extract-json-object.util';
+import { sanitizeForPrompt } from 'src/shared/utils/prompt-sanitize.util';
 
 @Injectable()
 export class ReviewService implements OnModuleInit {
@@ -140,7 +48,7 @@ export class ReviewService implements OnModuleInit {
           content: prompt,
         },
       ],
-      system: SYSTEM_PROMPT,
+      system: REVIEW_SYSTEM_PROMPT,
     });
 
     const responseText =

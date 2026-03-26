@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { GithubService } from '../github/github.service';
-import { ReviewService } from '../review/review.service';
-import { PullRequestEvent, IssueCommentEvent } from './interfaces/webhook-event.interface';
+import { GithubService } from 'src/github/github.service';
+import { ReviewService } from 'src/review/review.service';
+import { PullRequestEvent, IssueCommentEvent } from 'src/webhook/interfaces/webhook-event.interface';
 
 @Injectable()
 export class WebhookService {

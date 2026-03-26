@@ -1,7 +1,7 @@
 import {
   PullRequestFile,
   ReviewResult,
-} from '../../github/interfaces/github.interface';
+} from 'src/github/interfaces/github.interface';
 
 export interface ReviewRequest {
   prTitle: string;

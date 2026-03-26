@@ -9,9 +9,9 @@ import {
   Get,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { WebhookService } from './webhook.service';
-import { WebhookSignatureGuard } from './guards/webhook-signature.guard';
-import { PullRequestEvent, IssueCommentEvent } from './interfaces/webhook-event.interface';
+import { WebhookService } from 'src/webhook/webhook.service';
+import { WebhookSignatureGuard } from 'src/webhook/guards/webhook-signature.guard';
+import { PullRequestEvent, IssueCommentEvent } from 'src/webhook/interfaces/webhook-event.interface';
 
 @Controller('webhook')
 export class WebhookController {
