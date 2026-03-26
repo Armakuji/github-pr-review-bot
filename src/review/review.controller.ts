@@ -124,13 +124,21 @@ export class ReviewController {
   private parseIntentAndRemainder(
     trimmed: string,
   ): { intent: PrWebhookIntent; remainder: string } | null {
-    const reviewMatch = trimmed.match(/^review\s+([\s\S]+)$/i);
-    if (reviewMatch) {
-      return { intent: 'review', remainder: reviewMatch[1].trim() };
+    // Use matched prefix length (handles variable whitespace / casing). Do not truncate
+    // before intent — truncation could cut off a PR URL and break remainder extraction.
+    const reviewPrefix = trimmed.match(/^review\s+/i);
+    if (reviewPrefix) {
+      return {
+        intent: 'review',
+        remainder: trimmed.slice(reviewPrefix[0].length).trim(),
+      };
     }
-    const protectMatch = trimmed.match(/^protect\s+([\s\S]+)$/i);
-    if (protectMatch) {
-      return { intent: 'protect', remainder: protectMatch[1].trim() };
+    const protectPrefix = trimmed.match(/^protect\s+/i);
+    if (protectPrefix) {
+      return {
+        intent: 'protect',
+        remainder: trimmed.slice(protectPrefix[0].length).trim(),
+      };
     }
     return null;
   }
@@ -293,21 +301,80 @@ export class ReviewController {
    * The text node may contain spaces (e.g. "https: //...") so we prefer href.
    */
   private extractPullRequestUrl(text: string): string {
-    // 1. Try href attributes first (MS Teams outgoing webhook format)
-    const hrefMatch = text.match(/href="(https:\/\/github\.com\/[^"]+\/pull\/\d+)"/i);
-    if (hrefMatch) {
-      return hrefMatch[1];
+    const maxScan = Math.min(text.length, 32_000);
+    const window = text.slice(0, maxScan);
+
+    // 1) MS Teams / HTML: href="https://github.com/..." (bounded scan, no unbounded [^"]+ ReDoS)
+    const hrefNeedle = 'href="';
+    let hrefIdx = window.indexOf(hrefNeedle);
+    while (hrefIdx !== -1) {
+      const valueStart = hrefIdx + hrefNeedle.length;
+      const valueEnd = window.indexOf('"', valueStart);
+      if (valueEnd !== -1 && valueEnd - valueStart <= 512) {
+        const href = window.slice(valueStart, valueEnd);
+        if (this.isGithubPullRequestUrl(href)) {
+          return this.stripUrlHashQuery(href);
+        }
+      }
+      hrefIdx = window.indexOf(hrefNeedle, hrefIdx + 1);
     }
 
-    // 2. Try a plain URL anywhere in the text (strip spaces that Teams may inject)
-    const normalised = text.replace(/https\s*:\s*\/\//g, 'https://');
-    const plainMatch = normalised.match(/https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+/i);
-    if (plainMatch) {
-      return plainMatch[0];
+    // 2) Plain text: fix "https: //" only in a short prefix (bounded replaces)
+    let candidate = window;
+    const schemeFixLen = Math.min(candidate.length, 800);
+    candidate =
+      candidate.slice(0, schemeFixLen).replace(/https\s*:\s*\/\//gi, 'https://') +
+      candidate.slice(schemeFixLen);
+
+    const schemes = ['https://github.com/', 'http://github.com/'];
+    for (const prefix of schemes) {
+      let at = candidate.indexOf(prefix);
+      while (at !== -1) {
+        const end = this.endOfUrlInText(candidate, at);
+        const slice = candidate.slice(at, end);
+        if (this.isGithubPullRequestUrl(slice)) {
+          return this.stripUrlHashQuery(slice);
+        }
+        at = candidate.indexOf(prefix, at + 1);
+      }
     }
 
-    // 3. Return the original text and let parsePullRequestUrl throw a clear error
-    return text;
+    // No PR URL found in scanned window — return empty so callers show a clear
+    // “no link” message instead of passing a random snippet to URL parsing.
+    return '';
+  }
+
+  private endOfUrlInText(s: string, start: number): number {
+    const max = Math.min(s.length, start + 400);
+    for (let i = start; i < max; i++) {
+      const c = s[i];
+      if (c <= ' ' || c === '"' || c === "'" || c === '<' || c === ')' || c === ']') {
+        return i;
+      }
+    }
+    return max;
+  }
+
+  private stripUrlHashQuery(url: string): string {
+    const q = url.indexOf('?');
+    const h = url.indexOf('#');
+    let cut = url.length;
+    if (q !== -1) cut = Math.min(cut, q);
+    if (h !== -1) cut = Math.min(cut, h);
+    return url.slice(0, cut);
+  }
+
+  private isGithubPullRequestUrl(candidate: string): boolean {
+    try {
+      const u = new URL(candidate);
+      if (u.hostname !== 'github.com') return false;
+      const parts = u.pathname.split('/').filter(Boolean);
+      if (parts.length < 4) return false;
+      if (parts[2] !== 'pull' && parts[2] !== 'pulls') return false;
+      return /^\d+$/.test(parts[3]);
+    } catch {
+      return false;
+    }
   }
 
   private parsePullRequestUrl(url: string): {
