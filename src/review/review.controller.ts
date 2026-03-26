@@ -124,14 +124,21 @@ export class ReviewController {
   private parseIntentAndRemainder(
     trimmed: string,
   ): { intent: PrWebhookIntent; remainder: string } | null {
-    const max = 12_000;
-    const t = trimmed.length > max ? trimmed.slice(0, max) : trimmed;
-    const lower = t.toLowerCase();
-    if (lower.startsWith('review ')) {
-      return { intent: 'review', remainder: t.slice(7).trim() };
+    // Use matched prefix length (handles variable whitespace / casing). Do not truncate
+    // before intent — truncation could cut off a PR URL and break remainder extraction.
+    const reviewPrefix = trimmed.match(/^review\s+/i);
+    if (reviewPrefix) {
+      return {
+        intent: 'review',
+        remainder: trimmed.slice(reviewPrefix[0].length).trim(),
+      };
     }
-    if (lower.startsWith('protect ')) {
-      return { intent: 'protect', remainder: t.slice(8).trim() };
+    const protectPrefix = trimmed.match(/^protect\s+/i);
+    if (protectPrefix) {
+      return {
+        intent: 'protect',
+        remainder: trimmed.slice(protectPrefix[0].length).trim(),
+      };
     }
     return null;
   }
@@ -332,7 +339,9 @@ export class ReviewController {
       }
     }
 
-    return window.slice(0, 512).trim();
+    // No PR URL found in scanned window — return empty so callers show a clear
+    // “no link” message instead of passing a random snippet to URL parsing.
+    return '';
   }
 
   private endOfUrlInText(s: string, start: number): number {
