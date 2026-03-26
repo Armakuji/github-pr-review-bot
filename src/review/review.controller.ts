@@ -2,6 +2,7 @@ import {
   Controller,
   Post,
   Body,
+  Headers,
   HttpCode,
   BadRequestException,
   Logger,
@@ -23,24 +24,63 @@ export class ReviewController {
   ) {}
 
   @Post('pr')
-  @HttpCode(202)
-  async reviewPullRequest(@Body() body: ReviewPRRequest) {
+  @HttpCode(200)
+  async reviewPullRequest(
+    @Body() body: ReviewPRRequest,
+  ) {
 
-    const prUrl = typeof body?.text === 'string' ? body.text.trim() : '';
+    this.logger.log(`Incoming request body: ${JSON.stringify(body)}`);
+    const rawText = typeof body?.text === 'string' ? body.text.trim() : '';
+    const prUrl = this.extractPullRequestUrl(rawText);
 
     if (!prUrl) {
-      throw new BadRequestException('prUrl is required and must be a non-empty string');
+      // MS Teams requires type+text even for errors
+      return {
+        type: 'message',
+        text: [
+          'Usopp reporting in!',
+          '',
+          'I can’t spot a GitHub Pull Request link in that message… and my legendary sniper eyes never miss!',
+          '',
+          'Please paste a PR link like:',
+          'https://github.com/owner/repo/pull/123',
+        ].join('\n'),
+      };
     }
 
-    const { owner, repo, prNumber } = this.parsePullRequestUrl(prUrl);
+    let owner: string, repo: string, prNumber: number;
+    try {
+      ({ owner, repo, prNumber } = this.parsePullRequestUrl(prUrl));
+    } catch {
+      return {
+        type: 'message',
+        text: [
+          'Whoa there—Usopp almost tripped!',
+          '',
+          `That link looks suspicious: \`${prUrl}\``,
+          '',
+          'Give me a clean GitHub PR link like:',
+          'https://github.com/owner/repo/pull/123',
+        ].join('\n'),
+      };
+    }
 
     this.logger.log(`Manual review requested for ${owner}/${repo} PR #${prNumber}`);
 
-    // Fire-and-forget background processing
-    // (Do not await; errors are logged inside)
     void this.processReviewInBackground(owner, repo, prNumber);
 
-    return `🤖 Review queued for PR: https://github.com/${owner}/${repo}/pull/${prNumber}`;
+    // MS Teams outgoing webhook requires { type: "message", text: "..." }
+    return {
+      type: 'message',
+      text: [
+        'Usopp the Great has accepted your quest!',
+        '',
+        `I’m queuing a review for **${owner}/${repo}** PR #${prNumber}.`,
+        'I’ll fire my comments straight onto the PR in a moment—BANG!',
+        '',
+        `PR: https://github.com/${owner}/${repo}/pull/${prNumber}`,
+      ].join('\n'),
+    };
   }
 
   private async processReviewInBackground(owner: string, repo: string, prNumber: number) {
@@ -78,6 +118,29 @@ export class ReviewController {
         error?.stack,
       );
     }
+  }
+
+  /**
+   * Extracts a GitHub PR URL from either a plain URL string or an MS Teams
+   * HTML message where the URL appears in an <a href="..."> attribute.
+   * The text node may contain spaces (e.g. "https: //...") so we prefer href.
+   */
+  private extractPullRequestUrl(text: string): string {
+    // 1. Try href attributes first (MS Teams outgoing webhook format)
+    const hrefMatch = text.match(/href="(https:\/\/github\.com\/[^"]+\/pull\/\d+)"/i);
+    if (hrefMatch) {
+      return hrefMatch[1];
+    }
+
+    // 2. Try a plain URL anywhere in the text (strip spaces that Teams may inject)
+    const normalised = text.replace(/https\s*:\s*\/\//g, 'https://');
+    const plainMatch = normalised.match(/https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+/i);
+    if (plainMatch) {
+      return plainMatch[0];
+    }
+
+    // 3. Return the original text and let parsePullRequestUrl throw a clear error
+    return text;
   }
 
   private parsePullRequestUrl(url: string): {
