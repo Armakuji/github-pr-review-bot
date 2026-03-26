@@ -11,8 +11,8 @@ GitHub / Manual Request
   │
   │  ┌─ Pull Request Event (opened / synchronize / reopened) [AUTO MODE]
   │  ├─ Issue Comment Event (with trigger keyword) [COMMENT MODE]
-  │  └─ Manual API Call (POST /review/pr with PR URL) [MANUAL MODE]
-  ▼
+  │  └─ Manual API Call (POST /review/pr: `review <url>` or `protect <url>`) [MANUAL MODE]
+  ▼:
 Webhook Receiver (POST /webhook/github) or Review Controller (POST /review/pr)
   │
   │  verify signature (webhook) / parse PR URL (manual) + fetch PR diff
@@ -113,32 +113,43 @@ The bot can be triggered in three ways:
 
 1. **Automatic (Push action)**: Reviews are automatically posted when a PR is opened, synchronized, or reopened
 2. **Manual (Comment trigger)**: Post a comment on any PR containing one of these keywords:
-   - `@review-bot`
-   - `@bot review`
-   - `/review`
-3. **Manual (API call)**: Send a POST request to `/review/pr` with the PR URL (see API Endpoints section)
+  - `@review-bot`
+  - `@bot review`
+  - `/review`
+3. **Manual (API call)**: Send a POST request to `/review/pr` with **`review <url>`** (AI review) or **`protect <url>`** (push back on unfair comments) — same path, keyword picks the mode (see API Endpoints section)
 
 ## API Endpoints
+
 
 | Method | Path              | Description             |
 | ------ | ----------------- | ----------------------- |
 | `GET`  | `/webhook/health` | Health check            |
 | `POST` | `/webhook/github` | GitHub webhook receiver |
-| `POST` | `/review/pr`      | Manual PR review by URL |
+| `POST` | `/review/pr`      | Manual review (`review <url>`) or protect mode (`protect <url>`) |
 
-### Manual PR Review
 
-You can manually trigger a review by sending a POST request with a GitHub PR URL:
+### Manual PR Review & Protect
+
+Use the same endpoint; the **first word** selects the mode, then paste the PR URL:
+
+- **`review https://github.com/owner/repo/pull/123`** — run the AI code review on the PR.
+- **`protect https://github.com/owner/repo/pull/123`** — analyze others’ comments and reply when they deserve pushback.
 
 **Endpoint:** `POST /review/pr`
 
-**Example using curl:**
+**Examples using curl:**
+
 ```bash
+# AI review
 curl -X POST http://localhost:3000/review/pr \
   -H "Content-Type: application/json" \
-  -d '{"text": "https://github.com/Armakuji/github-pr-review-bot/pull/8"}'
-```
+  -d '{"text": "review https://github.com/Armakuji/github-pr-review-bot/pull/8"}'
 
+# Protect mode (rebut unfair review comments)
+curl -X POST http://localhost:3000/review/pr \
+  -H "Content-Type: application/json" \
+  -d '{"text": "protect https://github.com/Armakuji/github-pr-review-bot/pull/8"}'
+```
 
 ## How the AI Review Works
 
@@ -157,11 +168,13 @@ Each review includes a footer crediting the AI model used: *"Reviewed by Claude 
 
 The bot categorizes issues into three severity levels:
 
-| Severity | Description | Badge |
-|----------|-------------|-------|
+
+| Severity        | Description                                                                       | Badge      |
+| --------------- | --------------------------------------------------------------------------------- | ---------- |
 | 🔴 **Critical** | Security vulnerabilities, data loss risks, critical bugs causing crashes/failures | `CRITICAL` |
-| 🟠 **High** | Major bugs, significant performance issues, missing critical error handling | `HIGH` |
-| 🟡 **Medium** | Moderate issues, code quality problems, potential bugs, minor performance issues | `MEDIUM` |
+| 🟠 **High**     | Major bugs, significant performance issues, missing critical error handling       | `HIGH`     |
+| 🟡 **Medium**   | Moderate issues, code quality problems, potential bugs, minor performance issues  | `MEDIUM`   |
+
 
 ### Automatic Decision Making
 
@@ -173,6 +186,7 @@ The bot automatically determines the review verdict based on severity:
 ### Review Format
 
 Each review includes:
+
 - **Summary** with severity breakdown and conclusion
 - **Inline comments** on the PR diff (each comment includes severity)
 - **Automatic verdict** (Approve/Request Changes)

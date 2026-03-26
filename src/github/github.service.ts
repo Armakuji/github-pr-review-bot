@@ -4,6 +4,8 @@ import { Octokit } from '@octokit/rest';
 import {
   PullRequestFile,
   ReviewResult,
+  GithubPullReviewComment,
+  GithubIssueComment,
 } from './interfaces/github.interface';
 import { BINARY_EXTENSIONS, IGNORE_PATTERNS, MAX_FILES } from '../shared/constants/ignored-files.constant';
 import {
@@ -25,6 +27,87 @@ export class GithubService implements OnModuleInit {
       throw new Error('GITHUB_TOKEN is required');
     }
     this.octokit = new Octokit({ auth: token });
+  }
+
+  /** Login for the authenticated token (used to skip our own comments). */
+  async getAuthenticatedLogin(): Promise<string> {
+    const { data } = await this.octokit.users.getAuthenticated();
+    return data.login;
+  }
+
+  /** All inline review comments on the PR (includes replies). */
+  async listPullRequestReviewComments(
+    owner: string,
+    repo: string,
+    prNumber: number,
+  ): Promise<GithubPullReviewComment[]> {
+    const data = await this.octokit.paginate(this.octokit.pulls.listReviewComments, {
+      owner,
+      repo,
+      pull_number: prNumber,
+      per_page: 100,
+    });
+
+    return data.map((c) => ({
+      id: c.id,
+      body: c.body ?? '',
+      path: c.path,
+      line: c.line ?? null,
+      user: c.user ? { login: c.user.login } : null,
+      in_reply_to_id: c.in_reply_to_id ?? null,
+    }));
+  }
+
+  /** Top-level comments on the PR conversation (issue timeline). */
+  async listIssueComments(
+    owner: string,
+    repo: string,
+    prNumber: number,
+  ): Promise<GithubIssueComment[]> {
+    const data = await this.octokit.paginate(this.octokit.issues.listComments, {
+      owner,
+      repo,
+      issue_number: prNumber,
+      per_page: 100,
+    });
+
+    return data.map((c) => ({
+      id: c.id,
+      body: c.body ?? '',
+      user: c.user ? { login: c.user.login } : null,
+    }));
+  }
+
+  /** Reply in an inline review thread (GitHub “Apply suggestion” style). */
+  async replyToReviewComment(
+    owner: string,
+    repo: string,
+    prNumber: number,
+    commentId: number,
+    body: string,
+  ): Promise<void> {
+    await this.octokit.pulls.createReplyForReviewComment({
+      owner,
+      repo,
+      pull_number: prNumber,
+      comment_id: commentId,
+      body,
+    });
+  }
+
+  /** Post a new comment on the PR conversation timeline. */
+  async createIssueComment(
+    owner: string,
+    repo: string,
+    prNumber: number,
+    body: string,
+  ): Promise<void> {
+    await this.octokit.issues.createComment({
+      owner,
+      repo,
+      issue_number: prNumber,
+      body,
+    });
   }
 
   async getPullRequest(
