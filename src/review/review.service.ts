@@ -3,6 +3,11 @@ import { ConfigService } from '@nestjs/config';
 import Anthropic from '@anthropic-ai/sdk';
 import { ReviewRequest } from './interfaces/review.interface';
 import { ReviewResult } from '../github/interfaces/github.interface';
+import {
+  SEVERITY_BADGE_CRITICAL,
+  SEVERITY_BADGE_HIGH,
+  SEVERITY_BADGE_MEDIUM,
+} from '../shared/constants/severity-badges.constant';
 
 const CLAUDE_MODEL = 'claude-sonnet-4-20250514';
 const MODEL_DISPLAY_NAME = 'Claude Sonnet 4';
@@ -63,6 +68,7 @@ Respond ONLY with valid JSON — no markdown fences, no prose outside the JSON:
     }
   ]
 }`;
+
 
 @Injectable()
 export class ReviewService implements OnModuleInit {
@@ -212,13 +218,13 @@ export class ReviewService implements OnModuleInit {
     severityBreakdown += '|----------|-------|\n';
     
     if (severityCounts.critical > 0) {
-      severityBreakdown += `| 🔴 **Critical** | ${severityCounts.critical} |\n`;
+      severityBreakdown += `| ${SEVERITY_BADGE_CRITICAL} | ${severityCounts.critical} |\n`;
     }
     if (severityCounts.high > 0) {
-      severityBreakdown += `| 🟠 **High** | ${severityCounts.high} |\n`;
+      severityBreakdown += `| ${SEVERITY_BADGE_HIGH} | ${severityCounts.high} |\n`;
     }
     if (severityCounts.medium > 0) {
-      severityBreakdown += `| 🟡 **Medium** | ${severityCounts.medium} |\n`;
+      severityBreakdown += `| ${SEVERITY_BADGE_MEDIUM} | ${severityCounts.medium} |\n`;
     }
 
     const conclusion = this.buildConclusion(severityCounts);
