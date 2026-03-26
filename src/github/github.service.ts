@@ -6,6 +6,11 @@ import {
   ReviewResult,
 } from './interfaces/github.interface';
 import { BINARY_EXTENSIONS, IGNORE_PATTERNS, MAX_FILES } from '../shared/constants/ignored-files.constant';
+import {
+  SEVERITY_BADGE_CRITICAL,
+  SEVERITY_BADGE_HIGH,
+  SEVERITY_BADGE_MEDIUM,
+} from '../shared/constants/severity-badges.constant';
 
 @Injectable()
 export class GithubService implements OnModuleInit {
@@ -176,10 +181,10 @@ export class GithubService implements OnModuleInit {
   private formatInlineCommentBody(body: string, severity: ReviewResult['comments'][number]['severity']): string {
     const header =
       severity === 'critical'
-        ? '🔴 **Critical**'
+        ? SEVERITY_BADGE_CRITICAL
         : severity === 'high'
-          ? '🟠 **High**'
-          : '🟡 **Medium**';
+          ? SEVERITY_BADGE_HIGH
+          : SEVERITY_BADGE_MEDIUM;
 
     // Header on first line so it’s always visible in GitHub UI.
     return `${header}\n\n${body}`;
