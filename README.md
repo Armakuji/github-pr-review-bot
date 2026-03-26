@@ -11,7 +11,7 @@ GitHub / Manual Request
   │
   │  ┌─ Pull Request Event (opened / synchronize / reopened) [AUTO MODE]
   │  ├─ Issue Comment Event (with trigger keyword) [COMMENT MODE]
-  │  └─ Manual API Call (POST /review/pr with PR URL) [MANUAL MODE]
+  │  └─ Manual API Call (POST /review/pr: `review <url>` or `protect <url>`) [MANUAL MODE]
   ▼:
 Webhook Receiver (POST /webhook/github) or Review Controller (POST /review/pr)
   │
@@ -116,7 +116,7 @@ The bot can be triggered in three ways:
   - `@review-bot`
   - `@bot review`
   - `/review`
-3. **Manual (API call)**: Send a POST request to `/review/pr` with the PR URL (see API Endpoints section)
+3. **Manual (API call)**: Send a POST request to `/review/pr` with **`review <url>`** (AI review) or **`protect <url>`** (push back on unfair comments) — same path, keyword picks the mode (see API Endpoints section)
 
 ## API Endpoints
 
@@ -125,21 +125,30 @@ The bot can be triggered in three ways:
 | ------ | ----------------- | ----------------------- |
 | `GET`  | `/webhook/health` | Health check            |
 | `POST` | `/webhook/github` | GitHub webhook receiver |
-| `POST` | `/review/pr`      | Manual PR review by URL |
+| `POST` | `/review/pr`      | Manual review (`review <url>`) or protect mode (`protect <url>`) |
 
 
-### Manual PR Review
+### Manual PR Review & Protect
 
-You can manually trigger a review by sending a POST request with a GitHub PR URL:
+Use the same endpoint; the **first word** selects the mode, then paste the PR URL:
+
+- **`review https://github.com/owner/repo/pull/123`** — run the AI code review on the PR.
+- **`protect https://github.com/owner/repo/pull/123`** — analyze others’ comments and reply when they deserve pushback.
 
 **Endpoint:** `POST /review/pr`
 
-**Example using curl:**
+**Examples using curl:**
 
 ```bash
+# AI review
 curl -X POST http://localhost:3000/review/pr \
   -H "Content-Type: application/json" \
-  -d '{"text": "https://github.com/Armakuji/github-pr-review-bot/pull/8"}'
+  -d '{"text": "review https://github.com/Armakuji/github-pr-review-bot/pull/8"}'
+
+# Protect mode (rebut unfair review comments)
+curl -X POST http://localhost:3000/review/pr \
+  -H "Content-Type: application/json" \
+  -d '{"text": "protect https://github.com/Armakuji/github-pr-review-bot/pull/8"}'
 ```
 
 ## How the AI Review Works

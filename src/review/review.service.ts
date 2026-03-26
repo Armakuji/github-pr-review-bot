@@ -2,12 +2,12 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Anthropic from '@anthropic-ai/sdk';
 import { ReviewRequest } from './interfaces/review.interface';
-import { ReviewResult } from '../github/interfaces/github.interface';
 import {
-  SEVERITY_BADGE_CRITICAL,
-  SEVERITY_BADGE_HIGH,
-  SEVERITY_BADGE_MEDIUM,
-} from '../shared/constants/severity-badges.constant';
+  ProtectAnalysisInput,
+  ProtectAnalysisItem,
+  ProtectAnalysisResult,
+} from './interfaces/protect.interface';
+import { ReviewResult } from '../github/interfaces/github.interface';
 
 const CLAUDE_MODEL = 'claude-sonnet-4-20250514';
 const MODEL_DISPLAY_NAME = 'Claude Sonnet 4';
@@ -69,6 +69,36 @@ Respond ONLY with valid JSON — no markdown fences, no prose outside the JSON:
   ]
 }`;
 
+const PROTECT_SYSTEM_PROMPT = `You evaluate **other people's** comments on a pull request (human or bot reviewers, Copilot, etc.) from the **author's side**.
+
+## Your job
+- For each comment, decide if it is **fair and useful** (good-faith, technically sound, proportional) or deserves **pushback** (wrong, misleading, empty nitpick, generic AI slop, overconfident, or based on a wrong reading of the code).
+- If the comment is **acceptable**, leave it alone: stance "accept", reply_body null.
+- If it deserves **pushback**, stance "pushback" and write a short reply that:
+  - Corrects the record with facts and reasoning;
+  - Stays professional — no insults, no harassment;
+  - Can be confident and slightly witty (the author wants to "fight back" on substance, not flame wars);
+  - Keeps markdown suitable for GitHub (short paragraphs, optional bullet points).
+
+## Rules
+1. Only output entries for comments listed in the user message — one per comment id.
+2. Do not invent new comment ids.
+3. If unsure, prefer "accept" — only push back when you have a clear technical reason.
+4. reply_body must be null when stance is "accept".
+
+## Output format
+Respond ONLY with valid JSON — no markdown fences, no prose outside the JSON:
+{
+  "items": [
+    {
+      "kind": "review" | "issue",
+      "id": 12345,
+      "stance": "accept" | "pushback",
+      "reply_body": "markdown reply or null"
+    }
+  ]
+}`;
+
 
 @Injectable()
 export class ReviewService implements OnModuleInit {
@@ -106,6 +136,119 @@ export class ReviewService implements OnModuleInit {
       message.content[0].type === 'text' ? message.content[0].text : '';
 
     return this.parseResponse(responseText);
+  }
+
+  /**
+   * Classifies third-party PR comments and drafts reply text for unfair or low-quality ones.
+   */
+  async analyzeProtectComments(
+    input: ProtectAnalysisInput,
+  ): Promise<ProtectAnalysisResult> {
+    if (input.comments.length === 0) {
+      return { items: [] };
+    }
+
+    const prompt = this.buildProtectPrompt(input);
+    this.logger.log(
+      `Protect mode: analyzing ${input.comments.length} comment(s)`,
+    );
+
+    const message = await this.client.messages.create({
+      model: CLAUDE_MODEL,
+      max_tokens: 8192,
+      messages: [{ role: 'user', content: prompt }],
+      system: PROTECT_SYSTEM_PROMPT,
+    });
+
+    const responseText =
+      message.content[0].type === 'text' ? message.content[0].text : '';
+
+    return this.parseProtectResponse(responseText, input.comments);
+  }
+
+  private buildProtectPrompt(input: ProtectAnalysisInput): string {
+    let text = `## Pull request context\n`;
+    text += `**Title:** ${input.prTitle}\n`;
+    text += `**Branch:** ${input.headBranch} → ${input.baseBranch}\n`;
+    if (input.prDescription?.trim()) {
+      text += `**Description:** ${input.prDescription}\n`;
+    }
+
+    text += `\n## Comments to evaluate\n\n`;
+    for (const c of input.comments) {
+      if (c.kind === 'review') {
+        text += `### review id=${c.id} author=${c.author} path=${c.path} line=${c.line ?? 'n/a'}\n`;
+        text += `${c.body}\n\n`;
+      } else {
+        text += `### issue id=${c.id} author=${c.author}\n`;
+        text += `${c.body}\n\n`;
+      }
+    }
+
+    text += `\nRespond with JSON only, one item per comment above, matching kind and id.`;
+    return text;
+  }
+
+  private parseProtectResponse(
+    text: string,
+    originals: ProtectAnalysisInput['comments'],
+  ): ProtectAnalysisResult {
+    const fallbackAccept = (): ProtectAnalysisResult => ({
+      items: originals.map((c) => ({
+        kind: c.kind,
+        id: c.id,
+        stance: 'accept' as const,
+        replyBody: null,
+      })),
+    });
+
+    try {
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) {
+        throw new Error('No JSON found in response');
+      }
+
+      const parsed = JSON.parse(jsonMatch[0]);
+      const rawItems = parsed.items || [];
+      const byKey = new Map<string, ProtectAnalysisItem>();
+
+      for (const r of rawItems) {
+        const kind = r.kind === 'issue' ? 'issue' : 'review';
+        const id = Number(r.id);
+        const stance = r.stance === 'pushback' ? 'pushback' : 'accept';
+        let replyBody: string | null =
+          typeof r.reply_body === 'string' && r.reply_body.trim()
+            ? r.reply_body.trim()
+            : null;
+
+        if (stance === 'pushback' && replyBody) {
+          replyBody = `${replyBody}\n\n---\n*PR protect mode · ${MODEL_DISPLAY_NAME} 🤖*`;
+        }
+
+        byKey.set(`${kind}:${id}`, {
+          kind,
+          id,
+          stance,
+          replyBody: stance === 'pushback' ? replyBody : null,
+        });
+      }
+
+      const items: ProtectAnalysisItem[] = originals.map((c) => {
+        const found = byKey.get(`${c.kind}:${c.id}`);
+        if (found) return found;
+        return {
+          kind: c.kind,
+          id: c.id,
+          stance: 'accept',
+          replyBody: null,
+        };
+      });
+
+      return { items };
+    } catch (error: any) {
+      this.logger.warn(`Failed to parse protect response: ${error.message}`);
+      return fallbackAccept();
+    }
   }
 
   private buildPrompt(request: ReviewRequest): string {
@@ -218,13 +361,13 @@ export class ReviewService implements OnModuleInit {
     severityBreakdown += '|----------|-------|\n';
     
     if (severityCounts.critical > 0) {
-      severityBreakdown += `| ${SEVERITY_BADGE_CRITICAL} | ${severityCounts.critical} |\n`;
+      severityBreakdown += `| 🔴 **Critical** | ${severityCounts.critical} |\n`;
     }
     if (severityCounts.high > 0) {
-      severityBreakdown += `| ${SEVERITY_BADGE_HIGH} | ${severityCounts.high} |\n`;
+      severityBreakdown += `| 🟠 **High** | ${severityCounts.high} |\n`;
     }
     if (severityCounts.medium > 0) {
-      severityBreakdown += `| ${SEVERITY_BADGE_MEDIUM} | ${severityCounts.medium} |\n`;
+      severityBreakdown += `| 🟡 **Medium** | ${severityCounts.medium} |\n`;
     }
 
     const conclusion = this.buildConclusion(severityCounts);

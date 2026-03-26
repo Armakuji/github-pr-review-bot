@@ -26,3 +26,20 @@ export interface ReviewResult {
     medium: number;
   };
 }
+
+/** GitHub pull request review comment (inline on diff). */
+export interface GithubPullReviewComment {
+  id: number;
+  body: string;
+  path: string;
+  line: number | null;
+  user: { login: string } | null;
+  in_reply_to_id: number | null;
+}
+
+/** GitHub issue comment on a PR. */
+export interface GithubIssueComment {
+  id: number;
+  body: string;
+  user: { login: string } | null;
+}
