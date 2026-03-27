@@ -9,9 +9,12 @@ import {
 import { GithubService } from 'src/github/github.service';
 import { ReviewService } from 'src/review/review.service';
 import { ProtectCommentInput } from 'src/review/interfaces/protect.interface';
+import { LogStashService } from 'src/shared/services/log-stash.service';
 
 interface ReviewPRRequest {
   text: string;
+  /** Optional display name or login for logstash `requester`. */
+  requester?: string;
 }
 
 /** Max third-party comments to send to the model per request (avoids huge threads). */
@@ -26,6 +29,7 @@ export class ReviewController {
   constructor(
     private readonly githubService: GithubService,
     private readonly reviewService: ReviewService,
+    private readonly logStashService: LogStashService,
   ) {}
 
   @Post('pr')
@@ -36,6 +40,10 @@ export class ReviewController {
 
     this.logger.log(`Incoming request body: ${JSON.stringify(body)}`);
     const rawText = typeof body?.text === 'string' ? body.text.trim() : '';
+    const requester =
+      typeof body?.requester === 'string' && body.requester.trim()
+        ? body.requester.trim()
+        : undefined;
 
     const intentResult = this.parseIntentAndRemainder(rawText);
     if (!intentResult) {
@@ -89,7 +97,7 @@ export class ReviewController {
 
     if (intent === 'review') {
       this.logger.log(`Manual review requested for ${owner}/${repo} PR #${prNumber}`);
-      void this.processReviewInBackground(owner, repo, prNumber);
+      void this.processReviewInBackground(owner, repo, prNumber, requester);
       return {
         type: 'message',
         text: [
@@ -120,6 +128,9 @@ export class ReviewController {
 
   /**
    * Single webhook: `review <url>` runs AI review; `protect <url>` runs protect mode.
+   * Also accepts a short prefix (e.g. `Usopp review <url>`) by matching the first
+   * whole-word `review` or `protect` before the first GitHub URL only, so repo
+   * path segments like `…-protect-…` do not flip intent.
    */
   private parseIntentAndRemainder(
     trimmed: string,
@@ -140,10 +151,60 @@ export class ReviewController {
         remainder: trimmed.slice(protectPrefix[0].length).trim(),
       };
     }
-    return null;
+
+    const urlIdx = this.findFirstGithubUrlStartIndex(trimmed);
+    const beforeUrl = urlIdx === -1 ? trimmed : trimmed.slice(0, urlIdx);
+
+    const reviewMatch = /\breview\s+/i.exec(beforeUrl);
+    const protectMatch = /\bprotect\s+/i.exec(beforeUrl);
+
+    if (!reviewMatch && !protectMatch) {
+      return null;
+    }
+
+    let intent: PrWebhookIntent;
+    let keywordEndInTrimmed: number;
+
+    if (reviewMatch && protectMatch) {
+      if (reviewMatch.index <= protectMatch.index) {
+        intent = 'review';
+        keywordEndInTrimmed = reviewMatch.index + reviewMatch[0].length;
+      } else {
+        intent = 'protect';
+        keywordEndInTrimmed = protectMatch.index + protectMatch[0].length;
+      }
+    } else if (reviewMatch) {
+      intent = 'review';
+      keywordEndInTrimmed = reviewMatch.index + reviewMatch[0].length;
+    } else {
+      intent = 'protect';
+      keywordEndInTrimmed = protectMatch!.index + protectMatch![0].length;
+    }
+
+    return {
+      intent,
+      remainder: trimmed.slice(keywordEndInTrimmed).trim(),
+    };
   }
 
-  private async processReviewInBackground(owner: string, repo: string, prNumber: number) {
+  /** Start index of the first `https?://github.com` occurrence, or -1. */
+  private findFirstGithubUrlStartIndex(s: string): number {
+    const a = s.indexOf('https://github.com');
+    const b = s.indexOf('http://github.com');
+    const candidates = [a, b].filter((i) => i !== -1);
+    if (candidates.length === 0) {
+      return -1;
+    }
+    return Math.min(...candidates);
+  }
+
+  private async processReviewInBackground(
+    owner: string,
+    repo: string,
+    prNumber: number,
+    requester?: string,
+  ) {
+    const startedAt = new Date();
     try {
       const prData = await this.githubService.getPullRequest(owner, repo, prNumber);
 
@@ -155,7 +216,16 @@ export class ReviewController {
 
       this.logger.log(`Reviewing ${files.length} file(s)...`);
 
-      const reviewResult = await this.reviewService.reviewChanges({
+      const myLogin = await this.githubService.getAuthenticatedLogin();
+      const priorReviews = await this.githubService.countPullRequestReviewsByUser(
+        owner,
+        repo,
+        prNumber,
+        myLogin,
+      );
+      const isFirstReview = priorReviews === 0;
+
+      const { result: reviewResult, metrics } = await this.reviewService.reviewChanges({
         prTitle: prData.title,
         prDescription: prData.body || '',
         baseBranch: prData.base.ref,
@@ -169,6 +239,25 @@ export class ReviewController {
         prNumber,
         prData.head.sha,
         reviewResult,
+      );
+
+      const endedAt = new Date();
+      const prUrl = `https://github.com/${owner}/${repo}/pull/${prNumber}`;
+      await this.logStashService.appendReviewEntry(
+        this.logStashService.composeReviewEntry({
+          startedAt,
+          endedAt,
+          codexSeconds: metrics.llmSeconds,
+          prUrl,
+          prOwner: prData.authorLogin,
+          requester: this.logStashService.resolveRequester(requester),
+          event: reviewResult.event,
+          isFirstReview,
+          diffChars: metrics.diffChars,
+          conversationChars: metrics.conversationChars,
+          filesCount: metrics.filesCount,
+          languages: metrics.languages,
+        }),
       );
 
       this.logger.log(`Review submitted for PR #${prNumber}`);

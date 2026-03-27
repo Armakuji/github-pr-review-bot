@@ -1,7 +1,10 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Anthropic from '@anthropic-ai/sdk';
-import { ReviewRequest } from 'src/review/interfaces/review.interface';
+import {
+  ReviewChangesOutput,
+  ReviewRequest,
+} from 'src/review/interfaces/review.interface';
 import {
   ProtectAnalysisInput,
   ProtectAnalysisItem,
@@ -18,6 +21,7 @@ import { REVIEW_SYSTEM_PROMPT } from 'src/shared/constants/review-system-prompt.
 import { PROTECT_SYSTEM_PROMPT } from 'src/shared/constants/protect-system-prompt.constant';
 import { extractFirstJsonObject } from 'src/shared/utils/extract-json-object.util';
 import { sanitizeForPrompt } from 'src/shared/utils/prompt-sanitize.util';
+import { countLanguagesByFile } from 'src/shared/utils/file-language.util';
 
 @Injectable()
 export class ReviewService implements OnModuleInit {
@@ -34,11 +38,19 @@ export class ReviewService implements OnModuleInit {
     this.client = new Anthropic({ apiKey });
   }
 
-  async reviewChanges(request: ReviewRequest): Promise<ReviewResult> {
+  async reviewChanges(request: ReviewRequest): Promise<ReviewChangesOutput> {
     const prompt = this.buildPrompt(request);
+    const conversationChars = prompt.length + REVIEW_SYSTEM_PROMPT.length;
+    const diffChars = request.files.reduce(
+      (sum, f) => sum + (f.patch?.length ?? 0),
+      0,
+    );
+    const languages = countLanguagesByFile(request.files);
+    const filesCount = request.files.length;
 
     this.logger.log(`Sending ${request.files.length} file(s) for AI review`);
 
+    const t0 = performance.now();
     const message = await this.client.messages.create({
       model: CLAUDE_MODEL,
       max_tokens: 4096,
@@ -50,11 +62,22 @@ export class ReviewService implements OnModuleInit {
       ],
       system: REVIEW_SYSTEM_PROMPT,
     });
+    const llmSeconds = (performance.now() - t0) / 1000;
 
     const responseText =
       message.content[0].type === 'text' ? message.content[0].text : '';
 
-    return this.parseResponse(responseText);
+    const result = this.parseResponse(responseText);
+    return {
+      result,
+      metrics: {
+        llmSeconds,
+        conversationChars,
+        diffChars,
+        filesCount,
+        languages,
+      },
+    };
   }
 
   /**

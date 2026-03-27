@@ -125,6 +125,7 @@ export class GithubService implements OnModuleInit {
       number: data.number,
       title: data.title,
       body: data.body,
+      authorLogin: data.user?.login ?? '',
       head: {
         sha: data.head.sha,
         ref: data.head.ref,
@@ -134,6 +135,22 @@ export class GithubService implements OnModuleInit {
         ref: data.base.ref,
       },
     };
+  }
+
+  /** Count existing pull request reviews submitted by a given GitHub user. */
+  async countPullRequestReviewsByUser(
+    owner: string,
+    repo: string,
+    prNumber: number,
+    login: string,
+  ): Promise<number> {
+    const data = await this.octokit.paginate(this.octokit.pulls.listReviews, {
+      owner,
+      repo,
+      pull_number: prNumber,
+      per_page: 100,
+    });
+    return data.filter((r) => r.user?.login === login).length;
   }
 
   async getPullRequestFiles(
