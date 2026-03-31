@@ -10,6 +10,11 @@ import { GithubService } from 'src/github/github.service';
 import { ReviewService } from 'src/review/review.service';
 import { ProtectCommentInput } from 'src/review/interfaces/protect.interface';
 import { LogStashService } from 'src/shared/services/log-stash.service';
+import { buildPrDiscussionContext } from 'src/review/utils/build-pr-discussion-context.util';
+import {
+  buildInstantApproveIgnoredOnlyReviewResult,
+  metricsForIgnoredPatternFilesOnly,
+} from 'src/review/utils/instant-approve-ignored-only.util';
 
 interface ReviewPRRequest {
   text: string;
@@ -34,7 +39,7 @@ export class ReviewController {
 
   @Post('pr')
   @HttpCode(200)
-  async reviewPullRequest(
+  reviewPullRequest(
     @Body() body: ReviewPRRequest,
   ) {
 
@@ -61,6 +66,7 @@ export class ReviewController {
     }
 
     const { intent, remainder } = intentResult;
+
     const prUrl = this.extractPullRequestUrl(remainder);
 
     if (!prUrl) {
@@ -208,30 +214,67 @@ export class ReviewController {
     try {
       const prData = await this.githubService.getPullRequest(owner, repo, prNumber);
 
-      const files = await this.githubService.getPullRequestFiles(owner, repo, prNumber);
-      if (files.length === 0) {
-        this.logger.log(`No reviewable files in PR #${prNumber}`);
-        return;
-      }
-
-      this.logger.log(`Reviewing ${files.length} file(s)...`);
-
-      const myLogin = await this.githubService.getAuthenticatedLogin();
-      const priorReviews = await this.githubService.countPullRequestReviewsByUser(
+      const {
+        reviewableFiles,
+        onlyIgnoredPatternFiles,
+        ignoredPatternFilesWithPatch,
+      } = await this.githubService.getPullRequestFilesForReview(
         owner,
         repo,
         prNumber,
-        myLogin,
       );
+
+      if (onlyIgnoredPatternFiles) {
+        this.logger.log(
+          `PR #${prNumber}: only IGNORE_PATTERNS files with diffs; auto-approving`,
+        );
+      } else if (reviewableFiles.length === 0) {
+        this.logger.log(`No reviewable files in PR #${prNumber}`);
+        return;
+      } else {
+        this.logger.log(`Reviewing ${reviewableFiles.length} file(s)...`);
+      }
+
+      const myLogin = await this.githubService.getAuthenticatedLogin();
+      const [reviewComments, issueComments, priorReviews] = await Promise.all([
+        this.githubService.listPullRequestReviewComments(owner, repo, prNumber),
+        this.githubService.listIssueComments(owner, repo, prNumber),
+        this.githubService.countPullRequestReviewsByUser(
+          owner,
+          repo,
+          prNumber,
+          myLogin,
+        ),
+      ]);
       const isFirstReview = priorReviews === 0;
 
-      const { result: reviewResult, metrics } = await this.reviewService.reviewChanges({
-        prTitle: prData.title,
-        prDescription: prData.body || '',
-        baseBranch: prData.base.ref,
-        headBranch: prData.head.ref,
-        files,
-      });
+      const {
+        text: discussionText,
+        allowedReviewCommentIds,
+        allowedIssueCommentIds,
+      } = buildPrDiscussionContext(reviewComments, issueComments);
+      const existingDiscussion =
+        discussionText.length > 0 ? discussionText : undefined;
+
+      let reviewResult;
+      let metrics;
+      if (onlyIgnoredPatternFiles) {
+        reviewResult = buildInstantApproveIgnoredOnlyReviewResult();
+        metrics = metricsForIgnoredPatternFilesOnly(
+          ignoredPatternFilesWithPatch,
+        );
+      } else {
+        const rv = await this.reviewService.reviewChanges({
+          prTitle: prData.title,
+          prDescription: prData.body || '',
+          baseBranch: prData.base.ref,
+          headBranch: prData.head.ref,
+          files: reviewableFiles,
+          ...(existingDiscussion ? { existingDiscussion } : {}),
+        });
+        reviewResult = rv.result;
+        metrics = rv.metrics;
+      }
 
       await this.githubService.submitReview(
         owner,
@@ -241,13 +284,22 @@ export class ReviewController {
         reviewResult,
       );
 
+      await this.githubService.postFollowupReplies(
+        owner,
+        repo,
+        prNumber,
+        reviewResult,
+        allowedReviewCommentIds,
+        allowedIssueCommentIds,
+      );
+
       const endedAt = new Date();
       const prUrl = `https://github.com/${owner}/${repo}/pull/${prNumber}`;
       await this.logStashService.appendReviewEntry(
         this.logStashService.composeReviewEntry({
           startedAt,
           endedAt,
-          codexSeconds: metrics.llmSeconds,
+          llmSeconds: metrics.llmSeconds,
           prUrl,
           prOwner: prData.authorLogin,
           requester: this.logStashService.resolveRequester(requester),

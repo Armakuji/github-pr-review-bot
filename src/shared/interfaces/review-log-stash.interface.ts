@@ -1,11 +1,11 @@
-/** One NDJSON line appended to `logStash/mm_yyyy.json` after a completed PR review. */
+/** One review metrics row (written to `logStash/mm_yyyy.csv` after a completed PR review). */
 export interface ReviewLogStashEntry {
   timestamp: string;
   started_at: string;
   ended_at: string;
   duration_seconds: number;
-  /** Wall-clock time spent in the Anthropic Messages API call (LLM round-trip). */
-  codex_seconds: number;
+  /** Wall-clock time spent in the LLM API call (round-trip). */
+  llm_seconds: number;
   /** Rough estimate of human review time from diff size (chars/sec heuristic). */
   estimated_human_seconds: number;
   pr_url: string;

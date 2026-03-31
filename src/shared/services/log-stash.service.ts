@@ -4,6 +4,10 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { ReviewLogStashEntry } from 'src/shared/interfaces/review-log-stash.interface';
 import { formatZonedIso } from 'src/shared/utils/zoned-iso.util';
+import {
+  REVIEW_LOG_STASH_CSV_HEADER,
+  formatReviewLogStashCsvRow,
+} from 'src/shared/utils/review-log-stash-csv.util';
 
 @Injectable()
 export class LogStashService {
@@ -12,6 +16,7 @@ export class LogStashService {
   private readonly baselineSeconds: number;
   private readonly logDir: string;
   private readonly defaultRequester: string;
+  private readonly csvAgent: string;
 
   constructor(private readonly configService: ConfigService) {
     this.timeZone =
@@ -23,6 +28,8 @@ export class LogStashService {
     this.defaultRequester =
       this.configService.get<string>('logStash.defaultRequester') ??
       'NitiponArm';
+    this.csvAgent =
+      this.configService.get<string>('logStash.csvAgent') ?? 'Claude Sonnet 4';
   }
 
   /** Use explicit requester when set; otherwise `logStash.defaultRequester`. */
@@ -39,7 +46,7 @@ export class LogStashService {
   composeReviewEntry(params: {
     startedAt: Date;
     endedAt: Date;
-    codexSeconds: number;
+    llmSeconds: number;
     prUrl: string;
     prOwner: string;
     requester: string;
@@ -60,7 +67,7 @@ export class LogStashService {
       started_at: this.formatZoned(params.startedAt),
       ended_at: this.formatZoned(params.endedAt),
       duration_seconds: durationSeconds,
-      codex_seconds: params.codexSeconds,
+      llm_seconds: params.llmSeconds,
       estimated_human_seconds: estimatedHumanSeconds,
       pr_url: params.prUrl,
       pr_owner: params.prOwner,
@@ -77,47 +84,69 @@ export class LogStashService {
   }
 
   /**
-   * Appends one entry to a JSON array in `logStash/mm_yyyy.json` (read → push → write).
-   * Existing NDJSON lines are migrated into the array when first rewritten.
+   * Appends one row to `logStash/mm_yyyy.csv`. If the CSV is missing but a legacy
+   * `mm_yyyy.json` exists, that file is converted into the CSV first (same month).
    */
   async appendReviewEntry(entry: ReviewLogStashEntry): Promise<void> {
     const now = new Date();
-    const fileName = this.monthYearFileName(now);
+    const fileName = this.monthYearCsvFileName(now);
     const dir = path.isAbsolute(this.logDir)
       ? this.logDir
       : path.join(process.cwd(), this.logDir);
-    const filePath = path.join(dir, fileName);
+    const csvPath = path.join(dir, fileName);
+    const legacyJsonPath = csvPath.replace(/\.csv$/i, '.json');
+    const agent = this.csvAgent;
 
     try {
       await fs.mkdir(dir, { recursive: true });
-      const existing = await this.readExistingEntries(filePath);
-      existing.push(entry);
-      await fs.writeFile(
-        filePath,
-        `${JSON.stringify(existing, null, 4)}\n`,
-        'utf8',
-      );
+
+      let csvHasRows = false;
+      try {
+        const st = await fs.stat(csvPath);
+        csvHasRows = st.size > 0;
+      } catch (e: any) {
+        if (e?.code !== 'ENOENT') {
+          throw e;
+        }
+      }
+
+      const row = formatReviewLogStashCsvRow(entry, agent);
+
+      if (csvHasRows) {
+        await fs.appendFile(csvPath, `${row}\n`, 'utf8');
+        return;
+      }
+
+      const prior = await this.tryReadLegacyJsonEntries(legacyJsonPath);
+      const lines = [REVIEW_LOG_STASH_CSV_HEADER];
+      for (const e of prior) {
+        lines.push(formatReviewLogStashCsvRow(e, agent));
+      }
+      lines.push(row);
+      await fs.writeFile(csvPath, `${lines.join('\n')}\n`, 'utf8');
     } catch (err: any) {
       this.logger.warn(
-        `LogStash: failed to write ${filePath}: ${err?.message ?? err}`,
+        `LogStash: failed to write ${csvPath}: ${err?.message ?? err}`,
       );
     }
   }
 
-  private async readExistingEntries(
-    filePath: string,
+  private async tryReadLegacyJsonEntries(
+    jsonPath: string,
   ): Promise<ReviewLogStashEntry[]> {
     let raw: string;
     try {
-      raw = await fs.readFile(filePath, 'utf8');
+      raw = await fs.readFile(jsonPath, 'utf8');
     } catch (e: any) {
       if (e?.code === 'ENOENT') {
         return [];
       }
       throw e;
     }
+    return this.parseJsonLogContent(raw.trim());
+  }
 
-    const trimmed = raw.trim();
+  private parseJsonLogContent(trimmed: string): ReviewLogStashEntry[] {
     if (!trimmed) {
       return [];
     }
@@ -125,19 +154,22 @@ export class LogStashService {
     try {
       const parsed = JSON.parse(trimmed);
       if (Array.isArray(parsed)) {
-        return parsed as ReviewLogStashEntry[];
+        return parsed
+          .map((x) => coerceLogEntry(x))
+          .filter((x): x is ReviewLogStashEntry => x !== null);
       }
       if (typeof parsed === 'object' && parsed !== null) {
-        return [parsed as ReviewLogStashEntry];
+        const one = coerceLogEntry(parsed);
+        return one ? [one] : [];
       }
     } catch {
-      // Legacy NDJSON: one JSON object per line
       const out: ReviewLogStashEntry[] = [];
       for (const line of trimmed.split('\n')) {
         const t = line.trim();
         if (!t) continue;
         try {
-          out.push(JSON.parse(t) as ReviewLogStashEntry);
+          const one = coerceLogEntry(JSON.parse(t));
+          if (one) out.push(one);
         } catch {
           /* skip bad line */
         }
@@ -161,8 +193,8 @@ export class LogStashService {
     return Math.round(diffChars / 4.2);
   }
 
-  /** File name `mm_yyyy.json` using calendar month/year in `logStash.timeZone`. */
-  private monthYearFileName(date: Date): string {
+  /** File name `mm_yyyy.csv` using calendar month/year in `logStash.timeZone`. */
+  private monthYearCsvFileName(date: Date): string {
     const parts = new Intl.DateTimeFormat('en-US', {
       timeZone: this.timeZone,
       year: 'numeric',
@@ -170,8 +202,20 @@ export class LogStashService {
     }).formatToParts(date);
     const get = (t: Intl.DateTimeFormatPartTypes) =>
       parts.find((p) => p.type === t)?.value ?? '01';
-    return `${get('month')}_${get('year')}.json`;
+    return `${get('month')}_${get('year')}.csv`;
   }
+}
+
+/** Drops JSON/NDJSON objects that are not shaped like `ReviewLogStashEntry`. */
+function coerceLogEntry(raw: unknown): ReviewLogStashEntry | null {
+  if (!raw || typeof raw !== 'object') {
+    return null;
+  }
+  const o = raw as Record<string, unknown>;
+  if (typeof o.llm_seconds !== 'number') {
+    return null;
+  }
+  return o as unknown as ReviewLogStashEntry;
 }
 
 function mapGithubEvent(

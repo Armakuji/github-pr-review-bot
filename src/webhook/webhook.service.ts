@@ -2,6 +2,11 @@ import { Injectable, Logger } from '@nestjs/common';
 import { GithubService } from 'src/github/github.service';
 import { ReviewService } from 'src/review/review.service';
 import { LogStashService } from 'src/shared/services/log-stash.service';
+import { buildPrDiscussionContext } from 'src/review/utils/build-pr-discussion-context.util';
+import {
+  buildInstantApproveIgnoredOnlyReviewResult,
+  metricsForIgnoredPatternFilesOnly,
+} from 'src/review/utils/instant-approve-ignored-only.util';
 import { PullRequestEvent, IssueCommentEvent } from 'src/webhook/interfaces/webhook-event.interface';
 
 @Injectable()
@@ -28,35 +33,67 @@ export class WebhookService {
       `Reviewing PR #${prNumber} "${pull_request.title}" in ${owner}/${repo}`,
     );
 
-    const files = await this.githubService.getPullRequestFiles(
+    const {
+      reviewableFiles,
+      onlyIgnoredPatternFiles,
+      ignoredPatternFilesWithPatch,
+    } = await this.githubService.getPullRequestFilesForReview(
       owner,
       repo,
       prNumber,
     );
 
-    if (files.length === 0) {
+    if (onlyIgnoredPatternFiles) {
+      this.logger.log(
+        `PR #${prNumber}: only IGNORE_PATTERNS files with diffs; auto-approving`,
+      );
+    } else if (reviewableFiles.length === 0) {
       this.logger.log(`No reviewable files in PR #${prNumber}`);
       return;
+    } else {
+      this.logger.log(`Reviewing ${reviewableFiles.length} file(s)...`);
     }
 
-    this.logger.log(`Reviewing ${files.length} file(s)...`);
-
     const myLogin = await this.githubService.getAuthenticatedLogin();
-    const priorReviews = await this.githubService.countPullRequestReviewsByUser(
-      owner,
-      repo,
-      prNumber,
-      myLogin,
-    );
+    const [reviewComments, issueComments, priorReviews] = await Promise.all([
+      this.githubService.listPullRequestReviewComments(owner, repo, prNumber),
+      this.githubService.listIssueComments(owner, repo, prNumber),
+      this.githubService.countPullRequestReviewsByUser(
+        owner,
+        repo,
+        prNumber,
+        myLogin,
+      ),
+    ]);
     const isFirstReview = priorReviews === 0;
 
-    const { result: reviewResult, metrics } = await this.reviewService.reviewChanges({
-      prTitle: pull_request.title,
-      prDescription: pull_request.body || '',
-      baseBranch: pull_request.base.ref,
-      headBranch: pull_request.head.ref,
-      files,
-    });
+    const {
+      text: discussionText,
+      allowedReviewCommentIds,
+      allowedIssueCommentIds,
+    } = buildPrDiscussionContext(reviewComments, issueComments);
+    const existingDiscussion =
+      discussionText.length > 0 ? discussionText : undefined;
+
+    let reviewResult;
+    let metrics;
+    if (onlyIgnoredPatternFiles) {
+      reviewResult = buildInstantApproveIgnoredOnlyReviewResult();
+      metrics = metricsForIgnoredPatternFilesOnly(
+        ignoredPatternFilesWithPatch,
+      );
+    } else {
+      const rv = await this.reviewService.reviewChanges({
+        prTitle: pull_request.title,
+        prDescription: pull_request.body || '',
+        baseBranch: pull_request.base.ref,
+        headBranch: pull_request.head.ref,
+        files: reviewableFiles,
+        ...(existingDiscussion ? { existingDiscussion } : {}),
+      });
+      reviewResult = rv.result;
+      metrics = rv.metrics;
+    }
 
     await this.githubService.submitReview(
       owner,
@@ -66,12 +103,21 @@ export class WebhookService {
       reviewResult,
     );
 
+    await this.githubService.postFollowupReplies(
+      owner,
+      repo,
+      prNumber,
+      reviewResult,
+      allowedReviewCommentIds,
+      allowedIssueCommentIds,
+    );
+
     const endedAt = new Date();
     await this.logStashService.appendReviewEntry(
       this.logStashService.composeReviewEntry({
         startedAt,
         endedAt,
-        codexSeconds: metrics.llmSeconds,
+        llmSeconds: metrics.llmSeconds,
         prUrl: pull_request.html_url,
         prOwner: pull_request.user.login,
         requester,
@@ -103,35 +149,67 @@ export class WebhookService {
 
     const prData = await this.githubService.getPullRequest(owner, repo, prNumber);
 
-    const files = await this.githubService.getPullRequestFiles(
+    const {
+      reviewableFiles,
+      onlyIgnoredPatternFiles,
+      ignoredPatternFilesWithPatch,
+    } = await this.githubService.getPullRequestFilesForReview(
       owner,
       repo,
       prNumber,
     );
 
-    if (files.length === 0) {
+    if (onlyIgnoredPatternFiles) {
+      this.logger.log(
+        `PR #${prNumber}: only IGNORE_PATTERNS files with diffs; auto-approving`,
+      );
+    } else if (reviewableFiles.length === 0) {
       this.logger.log(`No reviewable files in PR #${prNumber}`);
       return;
+    } else {
+      this.logger.log(`Reviewing ${reviewableFiles.length} file(s)...`);
     }
 
-    this.logger.log(`Reviewing ${files.length} file(s)...`);
-
     const myLogin = await this.githubService.getAuthenticatedLogin();
-    const priorReviews = await this.githubService.countPullRequestReviewsByUser(
-      owner,
-      repo,
-      prNumber,
-      myLogin,
-    );
+    const [reviewComments, issueComments, priorReviews] = await Promise.all([
+      this.githubService.listPullRequestReviewComments(owner, repo, prNumber),
+      this.githubService.listIssueComments(owner, repo, prNumber),
+      this.githubService.countPullRequestReviewsByUser(
+        owner,
+        repo,
+        prNumber,
+        myLogin,
+      ),
+    ]);
     const isFirstReview = priorReviews === 0;
 
-    const { result: reviewResult, metrics } = await this.reviewService.reviewChanges({
-      prTitle: prData.title,
-      prDescription: prData.body || '',
-      baseBranch: prData.base.ref,
-      headBranch: prData.head.ref,
-      files,
-    });
+    const {
+      text: discussionText,
+      allowedReviewCommentIds,
+      allowedIssueCommentIds,
+    } = buildPrDiscussionContext(reviewComments, issueComments);
+    const existingDiscussion =
+      discussionText.length > 0 ? discussionText : undefined;
+
+    let reviewResult;
+    let metrics;
+    if (onlyIgnoredPatternFiles) {
+      reviewResult = buildInstantApproveIgnoredOnlyReviewResult();
+      metrics = metricsForIgnoredPatternFilesOnly(
+        ignoredPatternFilesWithPatch,
+      );
+    } else {
+      const rv = await this.reviewService.reviewChanges({
+        prTitle: prData.title,
+        prDescription: prData.body || '',
+        baseBranch: prData.base.ref,
+        headBranch: prData.head.ref,
+        files: reviewableFiles,
+        ...(existingDiscussion ? { existingDiscussion } : {}),
+      });
+      reviewResult = rv.result;
+      metrics = rv.metrics;
+    }
 
     await this.githubService.submitReview(
       owner,
@@ -141,13 +219,22 @@ export class WebhookService {
       reviewResult,
     );
 
+    await this.githubService.postFollowupReplies(
+      owner,
+      repo,
+      prNumber,
+      reviewResult,
+      allowedReviewCommentIds,
+      allowedIssueCommentIds,
+    );
+
     const endedAt = new Date();
     const prUrl = issue.html_url;
     await this.logStashService.appendReviewEntry(
       this.logStashService.composeReviewEntry({
         startedAt,
         endedAt,
-        codexSeconds: metrics.llmSeconds,
+        llmSeconds: metrics.llmSeconds,
         prUrl,
         prOwner: prData.authorLogin,
         requester,

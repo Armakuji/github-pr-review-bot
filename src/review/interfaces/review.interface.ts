@@ -9,6 +9,11 @@ export interface ReviewRequest {
   baseBranch: string;
   headBranch: string;
   files: PullRequestFile[];
+  /**
+   * When set, enables follow-up mode: reconcile the diff with existing inline + timeline comments
+   * and optionally emit `repliesToReviewComments` / `repliesToIssueComments` on the result.
+   */
+  existingDiscussion?: string;
 }
 
 /** Metrics collected during `reviewChanges` (LLM + diff stats). */

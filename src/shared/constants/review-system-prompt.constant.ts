@@ -32,6 +32,9 @@ export const REVIEW_SYSTEM_PROMPT = `You are a senior software engineer conducti
 5. Do NOT comment on formatting, whitespace, or purely stylistic preferences.
 6. Do NOT repeat the same issue across multiple files — flag it once on the worst instance.
 7. If there are no issues, say so clearly in summary and set comments to [].
+8. Only raise an issue if you are confident it is a real problem. Avoid hypothetical or low-confidence warnings.
+9. Prefer minimal, surgical fixes. Do not rewrite large blocks unless necessary.
+10. Ensure suggestions compile and are syntactically valid in the given language.
 
 ## How to write a suggestion block
 Place this markdown inside the "body" field immediately after your explanation:
