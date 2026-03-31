@@ -116,15 +116,15 @@ The bot can be triggered in three ways:
   - `@review-bot`
   - `@bot review`
   - `/review`
-3. **Manual (API call)**: Send a POST request to `/review/pr` with **`review <url>`** (AI review) or **`protect <url>`** (push back on unfair comments) — same path, keyword picks the mode (see API Endpoints section)
+3. **Manual (API call)**: Send a POST request to `/review/pr` with `**review <url>`** (AI review) or `**protect <url>**` (push back on unfair comments) — same path, keyword picks the mode (see API Endpoints section)
 
 ## API Endpoints
 
 
-| Method | Path              | Description             |
-| ------ | ----------------- | ----------------------- |
-| `GET`  | `/webhook/health` | Health check            |
-| `POST` | `/webhook/github` | GitHub webhook receiver |
+| Method | Path              | Description                                                      |
+| ------ | ----------------- | ---------------------------------------------------------------- |
+| `GET`  | `/webhook/health` | Health check                                                     |
+| `POST` | `/webhook/github` | GitHub webhook receiver                                          |
 | `POST` | `/review/pr`      | Manual review (`review <url>`) or protect mode (`protect <url>`) |
 
 
@@ -132,8 +132,8 @@ The bot can be triggered in three ways:
 
 Use the same endpoint; the **first word** selects the mode, then paste the PR URL:
 
-- **`review https://github.com/owner/repo/pull/123`** — run the AI code review on the PR.
-- **`protect https://github.com/owner/repo/pull/123`** — analyze others’ comments and reply when they deserve pushback.
+- `**review https://github.com/owner/repo/pull/123`** — run the AI code review on the PR.
+- `**protect https://github.com/owner/repo/pull/123**` — analyze others’ comments and reply when they deserve pushback.
 
 **Endpoint:** `POST /review/pr`
 

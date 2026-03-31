@@ -1,6 +1,10 @@
 export interface PullRequestEvent {
   action: string;
   number: number;
+  /** User who triggered the event (e.g. who pushed or opened the PR). */
+  sender?: {
+    login: string;
+  };
   pull_request: {
     number: number;
     title: string;

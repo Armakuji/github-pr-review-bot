@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { Octokit } from '@octokit/rest';
 import {
   PullRequestFile,
+  PullRequestFilesForReview,
   ReviewResult,
   GithubPullReviewComment,
   GithubIssueComment,
@@ -13,6 +14,7 @@ import {
   SEVERITY_BADGE_HIGH,
   SEVERITY_BADGE_MEDIUM,
 } from 'src/shared/constants/severity-badges.constant';
+import { MODEL_DISPLAY_NAME } from 'src/shared/constants/claude-model.constant';
 
 @Injectable()
 export class GithubService implements OnModuleInit {
@@ -125,6 +127,7 @@ export class GithubService implements OnModuleInit {
       number: data.number,
       title: data.title,
       body: data.body,
+      authorLogin: data.user?.login ?? '',
       head: {
         sha: data.head.sha,
         ref: data.head.ref,
@@ -136,11 +139,31 @@ export class GithubService implements OnModuleInit {
     };
   }
 
-  async getPullRequestFiles(
+  /** Count existing pull request reviews submitted by a given GitHub user. */
+  async countPullRequestReviewsByUser(
     owner: string,
     repo: string,
     prNumber: number,
-  ): Promise<PullRequestFile[]> {
+    login: string,
+  ): Promise<number> {
+    const data = await this.octokit.paginate(this.octokit.pulls.listReviews, {
+      owner,
+      repo,
+      pull_number: prNumber,
+      per_page: 100,
+    });
+    return data.filter((r) => r.user?.login === login).length;
+  }
+
+  /**
+   * Lists PR files suitable for LLM review and detects “ignore-pattern only” PRs
+   * (every patch-bearing file matches `IGNORE_PATTERNS`).
+   */
+  async getPullRequestFilesForReview(
+    owner: string,
+    repo: string,
+    prNumber: number,
+  ): Promise<PullRequestFilesForReview> {
     const { data } = await this.octokit.pulls.listFiles({
       owner,
       repo,
@@ -148,34 +171,66 @@ export class GithubService implements OnModuleInit {
       per_page: 100,
     });
 
-    const filtered = data.filter((file) => {
-      if (!file.patch) return false;
-      
-      if (file.status === 'removed') return false;
-      
-      if (IGNORE_PATTERNS.some(pattern => pattern.test(file.filename))) {
+    const withPatchNotRemoved = data.filter(
+      (file) => file.patch && file.status !== 'removed',
+    );
+
+    const onlyIgnoredPatternFiles =
+      withPatchNotRemoved.length > 0 &&
+      withPatchNotRemoved.every((file) =>
+        IGNORE_PATTERNS.some((pattern) => pattern.test(file.filename)),
+      );
+
+    const ignoredPatternFilesWithPatch: PullRequestFile[] = onlyIgnoredPatternFiles
+      ? withPatchNotRemoved.map((file) => ({
+          filename: file.filename,
+          status: file.status,
+          additions: file.additions,
+          deletions: file.deletions,
+          patch: file.patch,
+        }))
+      : [];
+
+    const filtered = withPatchNotRemoved.filter((file) => {
+      if (IGNORE_PATTERNS.some((pattern) => pattern.test(file.filename))) {
         return false;
       }
-      
       const ext = file.filename.substring(file.filename.lastIndexOf('.'));
       return !BINARY_EXTENSIONS.has(ext.toLowerCase());
     });
 
     if (filtered.length > MAX_FILES) {
       this.logger.warn(
-        `PR has ${filtered.length} files. Limiting review to first ${MAX_FILES} files.`
+        `PR has ${filtered.length} files. Limiting review to first ${MAX_FILES} files.`,
       );
     }
 
-    return filtered
-      .slice(0, MAX_FILES)
-      .map((file) => ({
-        filename: file.filename,
-        status: file.status,
-        additions: file.additions,
-        deletions: file.deletions,
-        patch: file.patch,
-      }));
+    const reviewableFiles = filtered.slice(0, MAX_FILES).map((file) => ({
+      filename: file.filename,
+      status: file.status,
+      additions: file.additions,
+      deletions: file.deletions,
+      patch: file.patch,
+    }));
+
+    return {
+      reviewableFiles,
+      onlyIgnoredPatternFiles,
+      ignoredPatternFilesWithPatch,
+    };
+  }
+
+  async getPullRequestFiles(
+    owner: string,
+    repo: string,
+    prNumber: number,
+  ): Promise<PullRequestFile[]> {
+    const { reviewableFiles } = await this.getPullRequestFilesForReview(
+      owner,
+      repo,
+      prNumber,
+    );
+    return reviewableFiles;
   }
 
   async submitReview(
@@ -258,6 +313,67 @@ export class GithubService implements OnModuleInit {
 
       this.logger.error(`Failed to submit review: ${error?.message || error}`);
       throw error;
+    }
+  }
+
+  /**
+   * Posts follow-up replies from follow-up review mode (inline threads + timeline).
+   * IDs must match those included in the model prompt (caller supplies allow-lists).
+   */
+  async postFollowupReplies(
+    owner: string,
+    repo: string,
+    prNumber: number,
+    review: ReviewResult,
+    allowedReviewCommentIds: Set<number>,
+    allowedIssueCommentIds: Set<number>,
+  ): Promise<void> {
+    const footer = `\n\n---\n*Follow-up · ${MODEL_DISPLAY_NAME} 🤖*`;
+    const max = 5;
+
+    for (const r of (review.repliesToReviewComments ?? []).slice(0, max)) {
+      if (!allowedReviewCommentIds.has(r.review_comment_id)) {
+        this.logger.warn(
+          `Skipping follow-up: review_comment_id=${r.review_comment_id} not in allowed set`,
+        );
+        continue;
+      }
+      if (!r.body?.trim()) continue;
+      try {
+        await this.replyToReviewComment(
+          owner,
+          repo,
+          prNumber,
+          r.review_comment_id,
+          `${r.body.trim()}${footer}`,
+        );
+      } catch (e: any) {
+        this.logger.warn(
+          `Follow-up reply failed (review comment ${r.review_comment_id}): ${e?.message ?? e}`,
+        );
+      }
+    }
+
+    for (const r of (review.repliesToIssueComments ?? []).slice(0, max)) {
+      if (!allowedIssueCommentIds.has(r.issue_comment_id)) {
+        this.logger.warn(
+          `Skipping follow-up: issue_comment_id=${r.issue_comment_id} not in allowed set`,
+        );
+        continue;
+      }
+      if (!r.body?.trim()) continue;
+      try {
+        await this.createIssueComment(
+          owner,
+          repo,
+          prNumber,
+          `${r.body.trim()}${footer}`,
+        );
+      } catch (e: any) {
+        this.logger.warn(
+          `Follow-up timeline comment failed (issue comment ${r.issue_comment_id}): ${e?.message ?? e}`,
+        );
+      }
     }
   }
 

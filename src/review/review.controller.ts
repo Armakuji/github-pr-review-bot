@@ -9,9 +9,17 @@ import {
 import { GithubService } from 'src/github/github.service';
 import { ReviewService } from 'src/review/review.service';
 import { ProtectCommentInput } from 'src/review/interfaces/protect.interface';
+import { LogStashService } from 'src/shared/services/log-stash.service';
+import { buildPrDiscussionContext } from 'src/review/utils/build-pr-discussion-context.util';
+import {
+  buildInstantApproveIgnoredOnlyReviewResult,
+  metricsForIgnoredPatternFilesOnly,
+} from 'src/review/utils/instant-approve-ignored-only.util';
 
 interface ReviewPRRequest {
   text: string;
+  /** Optional display name or login for logstash `requester`. */
+  requester?: string;
 }
 
 /** Max third-party comments to send to the model per request (avoids huge threads). */
@@ -26,16 +34,21 @@ export class ReviewController {
   constructor(
     private readonly githubService: GithubService,
     private readonly reviewService: ReviewService,
+    private readonly logStashService: LogStashService,
   ) {}
 
   @Post('pr')
   @HttpCode(200)
-  async reviewPullRequest(
+  reviewPullRequest(
     @Body() body: ReviewPRRequest,
   ) {
 
     this.logger.log(`Incoming request body: ${JSON.stringify(body)}`);
     const rawText = typeof body?.text === 'string' ? body.text.trim() : '';
+    const requester =
+      typeof body?.requester === 'string' && body.requester.trim()
+        ? body.requester.trim()
+        : undefined;
 
     const intentResult = this.parseIntentAndRemainder(rawText);
     if (!intentResult) {
@@ -53,6 +66,7 @@ export class ReviewController {
     }
 
     const { intent, remainder } = intentResult;
+
     const prUrl = this.extractPullRequestUrl(remainder);
 
     if (!prUrl) {
@@ -89,7 +103,7 @@ export class ReviewController {
 
     if (intent === 'review') {
       this.logger.log(`Manual review requested for ${owner}/${repo} PR #${prNumber}`);
-      void this.processReviewInBackground(owner, repo, prNumber);
+      void this.processReviewInBackground(owner, repo, prNumber, requester);
       return {
         type: 'message',
         text: [
@@ -120,6 +134,9 @@ export class ReviewController {
 
   /**
    * Single webhook: `review <url>` runs AI review; `protect <url>` runs protect mode.
+   * Also accepts a short prefix (e.g. `Usopp review <url>`) by matching the first
+   * whole-word `review` or `protect` before the first GitHub URL only, so repo
+   * path segments like `…-protect-…` do not flip intent.
    */
   private parseIntentAndRemainder(
     trimmed: string,
@@ -140,28 +157,124 @@ export class ReviewController {
         remainder: trimmed.slice(protectPrefix[0].length).trim(),
       };
     }
-    return null;
+
+    const urlIdx = this.findFirstGithubUrlStartIndex(trimmed);
+    const beforeUrl = urlIdx === -1 ? trimmed : trimmed.slice(0, urlIdx);
+
+    const reviewMatch = /\breview\s+/i.exec(beforeUrl);
+    const protectMatch = /\bprotect\s+/i.exec(beforeUrl);
+
+    if (!reviewMatch && !protectMatch) {
+      return null;
+    }
+
+    let intent: PrWebhookIntent;
+    let keywordEndInTrimmed: number;
+
+    if (reviewMatch && protectMatch) {
+      if (reviewMatch.index <= protectMatch.index) {
+        intent = 'review';
+        keywordEndInTrimmed = reviewMatch.index + reviewMatch[0].length;
+      } else {
+        intent = 'protect';
+        keywordEndInTrimmed = protectMatch.index + protectMatch[0].length;
+      }
+    } else if (reviewMatch) {
+      intent = 'review';
+      keywordEndInTrimmed = reviewMatch.index + reviewMatch[0].length;
+    } else {
+      intent = 'protect';
+      keywordEndInTrimmed = protectMatch!.index + protectMatch![0].length;
+    }
+
+    return {
+      intent,
+      remainder: trimmed.slice(keywordEndInTrimmed).trim(),
+    };
   }
 
-  private async processReviewInBackground(owner: string, repo: string, prNumber: number) {
+  /** Start index of the first `https?://github.com` occurrence, or -1. */
+  private findFirstGithubUrlStartIndex(s: string): number {
+    const a = s.indexOf('https://github.com');
+    const b = s.indexOf('http://github.com');
+    const candidates = [a, b].filter((i) => i !== -1);
+    if (candidates.length === 0) {
+      return -1;
+    }
+    return Math.min(...candidates);
+  }
+
+  private async processReviewInBackground(
+    owner: string,
+    repo: string,
+    prNumber: number,
+    requester?: string,
+  ) {
+    const startedAt = new Date();
     try {
       const prData = await this.githubService.getPullRequest(owner, repo, prNumber);
 
-      const files = await this.githubService.getPullRequestFiles(owner, repo, prNumber);
-      if (files.length === 0) {
+      const {
+        reviewableFiles,
+        onlyIgnoredPatternFiles,
+        ignoredPatternFilesWithPatch,
+      } = await this.githubService.getPullRequestFilesForReview(
+        owner,
+        repo,
+        prNumber,
+      );
+
+      if (onlyIgnoredPatternFiles) {
+        this.logger.log(
+          `PR #${prNumber}: only IGNORE_PATTERNS files with diffs; auto-approving`,
+        );
+      } else if (reviewableFiles.length === 0) {
         this.logger.log(`No reviewable files in PR #${prNumber}`);
         return;
+      } else {
+        this.logger.log(`Reviewing ${reviewableFiles.length} file(s)...`);
       }
 
-      this.logger.log(`Reviewing ${files.length} file(s)...`);
+      const myLogin = await this.githubService.getAuthenticatedLogin();
+      const [reviewComments, issueComments, priorReviews] = await Promise.all([
+        this.githubService.listPullRequestReviewComments(owner, repo, prNumber),
+        this.githubService.listIssueComments(owner, repo, prNumber),
+        this.githubService.countPullRequestReviewsByUser(
+          owner,
+          repo,
+          prNumber,
+          myLogin,
+        ),
+      ]);
+      const isFirstReview = priorReviews === 0;
 
-      const reviewResult = await this.reviewService.reviewChanges({
-        prTitle: prData.title,
-        prDescription: prData.body || '',
-        baseBranch: prData.base.ref,
-        headBranch: prData.head.ref,
-        files,
-      });
+      const {
+        text: discussionText,
+        allowedReviewCommentIds,
+        allowedIssueCommentIds,
+      } = buildPrDiscussionContext(reviewComments, issueComments);
+      const existingDiscussion =
+        discussionText.length > 0 ? discussionText : undefined;
+
+      let reviewResult;
+      let metrics;
+      if (onlyIgnoredPatternFiles) {
+        reviewResult = buildInstantApproveIgnoredOnlyReviewResult();
+        metrics = metricsForIgnoredPatternFilesOnly(
+          ignoredPatternFilesWithPatch,
+        );
+      } else {
+        const rv = await this.reviewService.reviewChanges({
+          prTitle: prData.title,
+          prDescription: prData.body || '',
+          baseBranch: prData.base.ref,
+          headBranch: prData.head.ref,
+          files: reviewableFiles,
+          ...(existingDiscussion ? { existingDiscussion } : {}),
+        });
+        reviewResult = rv.result;
+        metrics = rv.metrics;
+      }
 
       await this.githubService.submitReview(
         owner,
@@ -169,6 +282,34 @@ export class ReviewController {
         prNumber,
         prData.head.sha,
         reviewResult,
+      );
+
+      await this.githubService.postFollowupReplies(
+        owner,
+        repo,
+        prNumber,
+        reviewResult,
+        allowedReviewCommentIds,
+        allowedIssueCommentIds,
+      );
+
+      const endedAt = new Date();
+      const prUrl = `https://github.com/${owner}/${repo}/pull/${prNumber}`;
+      await this.logStashService.appendReviewEntry(
+        this.logStashService.composeReviewEntry({
+          startedAt,
+          endedAt,
+          llmSeconds: metrics.llmSeconds,
+          prUrl,
+          prOwner: prData.authorLogin,
+          requester: this.logStashService.resolveRequester(requester),
+          event: reviewResult.event,
+          isFirstReview,
+          diffChars: metrics.diffChars,
+          conversationChars: metrics.conversationChars,
+          filesCount: metrics.filesCount,
+          languages: metrics.languages,
+        }),
       );
 
       this.logger.log(`Review submitted for PR #${prNumber}`);

@@ -1,13 +1,20 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Anthropic from '@anthropic-ai/sdk';
-import { ReviewRequest } from 'src/review/interfaces/review.interface';
+import {
+  ReviewChangesOutput,
+  ReviewRequest,
+} from 'src/review/interfaces/review.interface';
 import {
   ProtectAnalysisInput,
   ProtectAnalysisItem,
   ProtectAnalysisResult,
 } from 'src/review/interfaces/protect.interface';
-import { ReviewResult } from 'src/github/interfaces/github.interface';
+import {
+  ReviewReplyToIssueComment,
+  ReviewReplyToReviewComment,
+  ReviewResult,
+} from 'src/github/interfaces/github.interface';
 import {
   SEVERITY_BADGE_CRITICAL,
   SEVERITY_BADGE_HIGH,
@@ -15,9 +22,11 @@ import {
 } from 'src/shared/constants/severity-badges.constant';
 import { CLAUDE_MODEL, MODEL_DISPLAY_NAME } from 'src/shared/constants/claude-model.constant';
 import { REVIEW_SYSTEM_PROMPT } from 'src/shared/constants/review-system-prompt.constant';
+import { REVIEW_DISCUSSION_FOLLOWUP_APPEND } from 'src/shared/constants/review-discussion-followup.constant';
 import { PROTECT_SYSTEM_PROMPT } from 'src/shared/constants/protect-system-prompt.constant';
 import { extractFirstJsonObject } from 'src/shared/utils/extract-json-object.util';
 import { sanitizeForPrompt } from 'src/shared/utils/prompt-sanitize.util';
+import { countLanguagesByFile } from 'src/shared/utils/file-language.util';
 
 @Injectable()
 export class ReviewService implements OnModuleInit {
@@ -34,27 +43,54 @@ export class ReviewService implements OnModuleInit {
     this.client = new Anthropic({ apiKey });
   }
 
-  async reviewChanges(request: ReviewRequest): Promise<ReviewResult> {
+  async reviewChanges(request: ReviewRequest): Promise<ReviewChangesOutput> {
+    const hasDiscussion = Boolean(
+      request.existingDiscussion?.trim().length,
+    );
     const prompt = this.buildPrompt(request);
+    const systemPrompt = hasDiscussion
+      ? `${REVIEW_SYSTEM_PROMPT}${REVIEW_DISCUSSION_FOLLOWUP_APPEND}`
+      : REVIEW_SYSTEM_PROMPT;
+    const conversationChars = prompt.length + systemPrompt.length;
+    const diffChars = request.files.reduce(
+      (sum, f) => sum + (f.patch?.length ?? 0),
+      0,
+    );
+    const languages = countLanguagesByFile(request.files);
+    const filesCount = request.files.length;
 
-    this.logger.log(`Sending ${request.files.length} file(s) for AI review`);
+    this.logger.log(
+      `Sending ${request.files.length} file(s) for AI review${hasDiscussion ? ' (with existing PR discussion)' : ''}`,
+    );
 
+    const t0 = performance.now();
     const message = await this.client.messages.create({
       model: CLAUDE_MODEL,
-      max_tokens: 4096,
+      max_tokens: hasDiscussion ? 8192 : 4096,
       messages: [
         {
           role: 'user',
           content: prompt,
         },
       ],
-      system: REVIEW_SYSTEM_PROMPT,
+      system: systemPrompt,
     });
+    const llmSeconds = (performance.now() - t0) / 1000;
 
     const responseText =
       message.content[0].type === 'text' ? message.content[0].text : '';
 
-    return this.parseResponse(responseText);
+    const result = this.parseResponse(responseText);
+    return {
+      result,
+      metrics: {
+        llmSeconds,
+        conversationChars,
+        diffChars,
+        filesCount,
+        languages,
+      },
+    };
   }
 
   /**
@@ -181,6 +217,12 @@ export class ReviewService implements OnModuleInit {
       prompt += `**Description:** ${sanitizeForPrompt(request.prDescription, 12_000)}\n`;
     }
 
+    if (request.existingDiscussion?.trim()) {
+      prompt += `\n## Existing PR discussion\n\n`;
+      prompt += `Read this carefully before commenting on the diff. Reconcile reviewer feedback with the code.\n\n`;
+      prompt += `${request.existingDiscussion.trim()}\n`;
+    }
+
     prompt += `\n## Changed Files\n\n`;
 
     for (const file of request.files) {
@@ -219,6 +261,9 @@ export class ReviewService implements OnModuleInit {
       const whatsGood =
         typeof parsed.whatsGood === 'string' ? parsed.whatsGood.trim() : '';
 
+      const { repliesToReviewComments, repliesToIssueComments } =
+        this.parseFollowupReplies(parsed);
+
       return {
         summary: this.buildSummaryWithSeverity(
           parsed.summary || 'Review completed.',
@@ -228,6 +273,10 @@ export class ReviewService implements OnModuleInit {
         comments,
         event,
         severityCounts,
+        ...(repliesToReviewComments?.length
+          ? { repliesToReviewComments }
+          : {}),
+        ...(repliesToIssueComments?.length ? { repliesToIssueComments } : {}),
       };
     } catch (error: any) {
       this.logger.warn(`Failed to parse AI response: ${error.message}`);
@@ -238,6 +287,43 @@ export class ReviewService implements OnModuleInit {
         severityCounts: { critical: 0, high: 0, medium: 0 },
       };
     }
+  }
+
+  private parseFollowupReplies(parsed: any): {
+    repliesToReviewComments?: ReviewReplyToReviewComment[];
+    repliesToIssueComments?: ReviewReplyToIssueComment[];
+  } {
+    const max = 5;
+    const repliesToReviewComments: ReviewReplyToReviewComment[] = [];
+    const rawR = parsed?.replies_to_review_comments;
+    if (Array.isArray(rawR)) {
+      for (const x of rawR.slice(0, max)) {
+        const id = Number(x?.review_comment_id);
+        const body =
+          typeof x?.body === 'string' ? x.body.trim() : '';
+        if (!Number.isFinite(id) || id < 1 || !body) continue;
+        repliesToReviewComments.push({ review_comment_id: id, body });
+      }
+    }
+
+    const repliesToIssueComments: ReviewReplyToIssueComment[] = [];
+    const rawI = parsed?.replies_to_issue_comments;
+    if (Array.isArray(rawI)) {
+      for (const x of rawI.slice(0, max)) {
+        const id = Number(x?.issue_comment_id);
+        const body =
+          typeof x?.body === 'string' ? x.body.trim() : '';
+        if (!Number.isFinite(id) || id < 1 || !body) continue;
+        repliesToIssueComments.push({ issue_comment_id: id, body });
+      }
+    }
+
+    return {
+      ...(repliesToReviewComments.length
+        ? { repliesToReviewComments }
+        : {}),
+      ...(repliesToIssueComments.length ? { repliesToIssueComments } : {}),
+    };
   }
 
   private normalizeSeverity(severity: string): 'critical' | 'high' | 'medium' {
