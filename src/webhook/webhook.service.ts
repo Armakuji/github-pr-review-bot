@@ -7,6 +7,7 @@ import {
   buildInstantApproveIgnoredOnlyReviewResult,
   metricsForIgnoredPatternFilesOnly,
 } from 'src/review/utils/instant-approve-ignored-only.util';
+import { buildNoReviewableFilesReviewResult } from 'src/review/utils/no-reviewable-files.util';
 import { PullRequestEvent, IssueCommentEvent } from 'src/webhook/interfaces/webhook-event.interface';
 
 @Injectable()
@@ -37,6 +38,8 @@ export class WebhookService {
       reviewableFiles,
       onlyIgnoredPatternFiles,
       ignoredPatternFilesWithPatch,
+      skippedPatchFilesForMetrics,
+      noReviewableFilesSummary,
     } = await this.githubService.getPullRequestFilesForReview(
       owner,
       repo,
@@ -48,16 +51,18 @@ export class WebhookService {
         `PR #${prNumber}: only IGNORE_PATTERNS files with diffs; auto-approving`,
       );
     } else if (reviewableFiles.length === 0) {
-      this.logger.log(`No reviewable files in PR #${prNumber}`);
-      return;
+      this.logger.log(
+        `No reviewable files in PR #${prNumber}: ${noReviewableFilesSummary ?? 'skipped'}`,
+      );
     } else {
       this.logger.log(`Reviewing ${reviewableFiles.length} file(s)...`);
     }
 
     const myLogin = await this.githubService.getAuthenticatedLogin();
-    const [reviewComments, issueComments, priorReviews] = await Promise.all([
+    const [reviewComments, issueComments, prReviews, priorReviews] = await Promise.all([
       this.githubService.listPullRequestReviewComments(owner, repo, prNumber),
       this.githubService.listIssueComments(owner, repo, prNumber),
+      this.githubService.listPullRequestReviews(owner, repo, prNumber),
       this.githubService.countPullRequestReviewsByUser(
         owner,
         repo,
@@ -71,7 +76,7 @@ export class WebhookService {
       text: discussionText,
       allowedReviewCommentIds,
       allowedIssueCommentIds,
-    } = buildPrDiscussionContext(reviewComments, issueComments);
+    } = buildPrDiscussionContext(reviewComments, issueComments, prReviews);
     const existingDiscussion =
       discussionText.length > 0 ? discussionText : undefined;
 
@@ -82,6 +87,12 @@ export class WebhookService {
       metrics = metricsForIgnoredPatternFilesOnly(
         ignoredPatternFilesWithPatch,
       );
+    } else if (reviewableFiles.length === 0) {
+      reviewResult = buildNoReviewableFilesReviewResult(
+        noReviewableFilesSummary ??
+          'No line-level diff was available for automated review.',
+      );
+      metrics = metricsForIgnoredPatternFilesOnly(skippedPatchFilesForMetrics);
     } else {
       const rv = await this.reviewService.reviewChanges({
         prTitle: pull_request.title,
@@ -153,6 +164,8 @@ export class WebhookService {
       reviewableFiles,
       onlyIgnoredPatternFiles,
       ignoredPatternFilesWithPatch,
+      skippedPatchFilesForMetrics,
+      noReviewableFilesSummary,
     } = await this.githubService.getPullRequestFilesForReview(
       owner,
       repo,
@@ -164,16 +177,18 @@ export class WebhookService {
         `PR #${prNumber}: only IGNORE_PATTERNS files with diffs; auto-approving`,
       );
     } else if (reviewableFiles.length === 0) {
-      this.logger.log(`No reviewable files in PR #${prNumber}`);
-      return;
+      this.logger.log(
+        `No reviewable files in PR #${prNumber}: ${noReviewableFilesSummary ?? 'skipped'}`,
+      );
     } else {
       this.logger.log(`Reviewing ${reviewableFiles.length} file(s)...`);
     }
 
     const myLogin = await this.githubService.getAuthenticatedLogin();
-    const [reviewComments, issueComments, priorReviews] = await Promise.all([
+    const [reviewComments, issueComments, prReviews, priorReviews] = await Promise.all([
       this.githubService.listPullRequestReviewComments(owner, repo, prNumber),
       this.githubService.listIssueComments(owner, repo, prNumber),
+      this.githubService.listPullRequestReviews(owner, repo, prNumber),
       this.githubService.countPullRequestReviewsByUser(
         owner,
         repo,
@@ -187,7 +202,7 @@ export class WebhookService {
       text: discussionText,
       allowedReviewCommentIds,
       allowedIssueCommentIds,
-    } = buildPrDiscussionContext(reviewComments, issueComments);
+    } = buildPrDiscussionContext(reviewComments, issueComments, prReviews);
     const existingDiscussion =
       discussionText.length > 0 ? discussionText : undefined;
 
@@ -198,6 +213,12 @@ export class WebhookService {
       metrics = metricsForIgnoredPatternFilesOnly(
         ignoredPatternFilesWithPatch,
       );
+    } else if (reviewableFiles.length === 0) {
+      reviewResult = buildNoReviewableFilesReviewResult(
+        noReviewableFilesSummary ??
+          'No line-level diff was available for automated review.',
+      );
+      metrics = metricsForIgnoredPatternFilesOnly(skippedPatchFilesForMetrics);
     } else {
       const rv = await this.reviewService.reviewChanges({
         prTitle: prData.title,

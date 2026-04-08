@@ -19,6 +19,15 @@ export interface PullRequestFilesForReview {
    * Empty otherwise.
    */
   ignoredPatternFilesWithPatch: PullRequestFile[];
+  /**
+   * When `reviewableFiles` is empty and `onlyIgnoredPatternFiles` is false: files that had a patch
+   * but were excluded from LLM review (for metrics / log stash).
+   */
+  skippedPatchFilesForMetrics: PullRequestFile[];
+  /**
+   * When `reviewableFiles` is empty and `onlyIgnoredPatternFiles` is false: short reason for the PR comment.
+   */
+  noReviewableFilesSummary?: string;
 }
 
 export type Severity = 'critical' | 'high' | 'medium';
@@ -71,5 +80,15 @@ export interface GithubPullReviewComment {
 export interface GithubIssueComment {
   id: number;
   body: string;
+  user: { login: string } | null;
+}
+
+export type PrReviewState = 'APPROVED' | 'CHANGES_REQUESTED' | 'DISMISSED' | 'COMMENTED' | 'PENDING';
+
+/** A submitted PR review (verdict + summary body). */
+export interface GithubPullRequestReview {
+  id: number;
+  body: string;
+  state: PrReviewState;
   user: { login: string } | null;
 }

@@ -7,6 +7,8 @@ import {
   ReviewResult,
   GithubPullReviewComment,
   GithubIssueComment,
+  GithubPullRequestReview,
+  PrReviewState,
 } from 'src/github/interfaces/github.interface';
 import { BINARY_EXTENSIONS, IGNORE_PATTERNS, MAX_FILES } from 'src/shared/constants/ignored-files.constant';
 import {
@@ -15,6 +17,7 @@ import {
   SEVERITY_BADGE_MEDIUM,
 } from 'src/shared/constants/severity-badges.constant';
 import { MODEL_DISPLAY_NAME } from 'src/shared/constants/claude-model.constant';
+import { buildNoReviewableFilesSummary } from 'src/shared/utils/no-reviewable-files-summary.util';
 
 @Injectable()
 export class GithubService implements OnModuleInit {
@@ -78,6 +81,38 @@ export class GithubService implements OnModuleInit {
       body: c.body ?? '',
       user: c.user ? { login: c.user.login } : null,
     }));
+  }
+
+  /**
+   * Lists all submitted reviews for a PR (APPROVED, CHANGES_REQUESTED, DISMISSED).
+   * Only includes reviews with a non-empty body; skips PENDING and COMMENTED reviews.
+   */
+  async listPullRequestReviews(
+    owner: string,
+    repo: string,
+    prNumber: number,
+  ): Promise<GithubPullRequestReview[]> {
+    const data = await this.octokit.paginate(this.octokit.pulls.listReviews, {
+      owner,
+      repo,
+      pull_number: prNumber,
+      per_page: 100,
+    });
+
+    return data
+      .filter(
+        (r) =>
+          r.body?.trim() &&
+          (r.state === 'DISMISSED' ||
+            r.state === 'CHANGES_REQUESTED' ||
+            r.state === 'APPROVED'),
+      )
+      .map((r) => ({
+        id: r.id,
+        body: r.body ?? '',
+        state: r.state as PrReviewState,
+        user: r.user ? { login: r.user.login } : null,
+      }));
   }
 
   /** Reply in an inline review thread (GitHub “Apply suggestion” style). */
@@ -213,10 +248,32 @@ export class GithubService implements OnModuleInit {
       patch: file.patch,
     }));
 
+    const noReviewableButNotIgnoredOnly =
+      !onlyIgnoredPatternFiles && reviewableFiles.length === 0;
+
+    const skippedPatchFilesForMetrics: PullRequestFile[] = noReviewableButNotIgnoredOnly
+      ? withPatchNotRemoved.map((file) => ({
+          filename: file.filename,
+          status: file.status,
+          additions: file.additions,
+          deletions: file.deletions,
+          patch: file.patch,
+        }))
+      : [];
+
     return {
       reviewableFiles,
       onlyIgnoredPatternFiles,
       ignoredPatternFilesWithPatch,
+      skippedPatchFilesForMetrics,
+      ...(noReviewableButNotIgnoredOnly
+        ? {
+            noReviewableFilesSummary: buildNoReviewableFilesSummary(
+              data.length,
+              withPatchNotRemoved.length,
+            ),
+          }
+        : {}),
     };
   }
 

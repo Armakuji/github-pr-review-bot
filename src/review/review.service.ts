@@ -261,6 +261,8 @@ export class ReviewService implements OnModuleInit {
       const whatsGood =
         typeof parsed.whatsGood === 'string' ? parsed.whatsGood.trim() : '';
 
+      const keyChanges = this.parseKeyChanges(parsed.keyChanges);
+
       const { repliesToReviewComments, repliesToIssueComments } =
         this.parseFollowupReplies(parsed);
 
@@ -269,6 +271,7 @@ export class ReviewService implements OnModuleInit {
           parsed.summary || 'Review completed.',
           severityCounts,
           whatsGood,
+          keyChanges,
         ),
         comments,
         event,
@@ -359,18 +362,57 @@ export class ReviewService implements OnModuleInit {
     return 'APPROVE';
   }
 
+  private parseKeyChanges(
+    raw: unknown,
+  ): Array<{ change: string; before: string; after: string }> {
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .filter(
+        (r): r is { change: string; before: string; after: string } =>
+          r &&
+          typeof r.change === 'string' && r.change.trim() &&
+          typeof r.before === 'string' &&
+          typeof r.after === 'string',
+      )
+      .slice(0, 10)
+      .map((r) => ({
+        change: r.change.trim(),
+        before: r.before.trim(),
+        after: r.after.trim(),
+      }));
+  }
+
+  private buildKeyChangesTable(
+    keyChanges: Array<{ change: string; before: string; after: string }>,
+  ): string {
+    if (keyChanges.length === 0) return '';
+    const rows = keyChanges
+      .map((r) => `| ${r.change} | ${r.before} | ${r.after} |`)
+      .join('\n');
+    return (
+      '\n\n## Key Changes\n\n' +
+      '| Key Change | Before | After |\n' +
+      '|---|---|---|\n' +
+      rows +
+      '\n'
+    );
+  }
+
   private buildSummaryWithSeverity(
     summary: string,
     severityCounts: { critical: number; high: number; medium: number },
     whatsGood: string,
+    keyChanges: Array<{ change: string; before: string; after: string }> = [],
   ): string {
+    const keyChangesSection = this.buildKeyChangesTable(keyChanges);
+
     const goodSection =
       whatsGood.length > 0
         ? `\n\n## What's Good ✅\n\n${whatsGood}\n`
         : '';
 
     const total = Object.values(severityCounts).reduce((a, b) => a + b, 0);
-    const intro = `${summary}${goodSection}`;
+    const intro = `${summary}${keyChangesSection}${goodSection}`;
 
     if (total === 0) {
       return `${intro}\n\n✅ **No issues found** - Code looks good!\n\n---\n*Reviewed by ${MODEL_DISPLAY_NAME} 🤖*`;
