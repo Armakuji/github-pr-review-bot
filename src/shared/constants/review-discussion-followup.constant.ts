@@ -53,4 +53,34 @@ Use **only** \`review_comment_id\` / \`issue_comment_id\` values that appear in 
 - **replies_to_review_comments**: Reply **in thread** under an existing **inline** review comment (use for line-level disputes). Maximum **5** entries.
 - **replies_to_issue_comments**: For **conversation** comments (PR timeline). Maximum **5** entries. Be concise; these post as new timeline comments referencing the discussion.
 
-If you have nothing to add as a reply, omit these keys or use empty arrays. Do not spam; only reply where it clarifies a substantive disagreement.`;
+If you have nothing to add as a reply, omit these keys or use empty arrays. Do not spam; only reply where it clarifies a substantive disagreement.
+
+## Prior issues status table (only when "Prior bot critical/high inline comments" section is present)
+
+When the prompt contains a **"Prior bot critical/high inline comments"** section, you MUST include a \`priorIssuesStatus\` array in your JSON. For every item listed in that section, provide one entry:
+
+- \`review_comment_id\` — copy the ID from the listing
+- \`severity\` — copy the severity from the listing (\`"critical"\` or \`"high"\`)
+- \`title\` — 5–8 word label for the issue (derive from the body excerpt)
+- \`resolved\` — \`true\` if the current diff shows the concern has been fully addressed; \`false\` if it remains or was only deferred
+- \`deferred_by_author\` — \`true\` **only** when the PR author (not just any reviewer) explicitly stated in the discussion that this issue is intentionally skipped for this PR — typical phrases: *"no need to do this for this PR"*, *"this PR just for initial purpose"*, *"will handle in follow-up"*, *"out of scope for now"*. When \`deferred_by_author\` is \`true\`, set \`resolved\` to \`false\` and treat the item as **⚠️ Pass (with condition)** — acceptable for approval in this PR but must be addressed before the feature goes to production.
+- \`status_note\` — one-sentence explanation; if deferred, quote the author's exact words and note when it must be addressed
+
+### Author-deferral behaviour
+
+When the PR author explicitly defers an issue and you set \`deferred_by_author: true\`:
+
+1. **Do NOT re-raise** the issue as a new inline \`comments\` entry.
+2. **Do NOT block the PR** on this issue alone — a PR where all unresolved prior issues are deferred by the author should be **APPROVED**, not REQUEST_CHANGES.
+3. **Do include** a short note in the "Why I'm Approving" section explaining you accept the deferral because the author explicitly acknowledged it and the current scope justifies the defer.
+4. Only reject the deferral if the issue is **critical severity** AND there is active business logic in the current diff that would be harmed by the missing fix (e.g. a stub that now actually executes).
+
+\`\`\`
+"priorIssuesStatus": [
+  { "review_comment_id": 123, "severity": "high", "title": "PHPMailer 5.2.27 EOL", "resolved": false, "status_note": "Still pinned to 5.2.27 in composer.json line 9" },
+  { "review_comment_id": 456, "severity": "high", "title": "Stored XSS via markdown links", "resolved": true, "status_note": "URL scheme validation added in news-detail.php" },
+  { "review_comment_id": 789, "severity": "high", "title": "Missing input validation on write endpoint", "resolved": false, "deferred_by_author": true, "status_note": "Author stated: 'no need to do this for this PR, this PR just for initial purpose.' Must be added before business logic is implemented." }
+]
+\`\`\`
+
+**Do NOT** re-raise a prior issue as a new inline \`comments\` entry if you are already tracking it in \`priorIssuesStatus\` — the status table replaces the duplicate inline comment. Omit \`priorIssuesStatus\` entirely when no "Prior bot critical/high inline comments" section was provided.`;

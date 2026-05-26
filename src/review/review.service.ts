@@ -4,6 +4,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import {
   ReviewChangesOutput,
   ReviewRequest,
+  PriorBotComment,
 } from 'src/review/interfaces/review.interface';
 import {
   ProtectAnalysisInput,
@@ -14,13 +15,17 @@ import {
   ReviewReplyToIssueComment,
   ReviewReplyToReviewComment,
   ReviewResult,
+  PriorIssueStatus,
 } from 'src/github/interfaces/github.interface';
 import {
   SEVERITY_BADGE_CRITICAL,
   SEVERITY_BADGE_HIGH,
   SEVERITY_BADGE_MEDIUM,
 } from 'src/shared/constants/severity-badges.constant';
-import { CLAUDE_MODEL, MODEL_DISPLAY_NAME } from 'src/shared/constants/claude-model.constant';
+import {
+  CLAUDE_MODEL,
+  MODEL_DISPLAY_NAME,
+} from 'src/shared/constants/claude-model.constant';
 import { REVIEW_SYSTEM_PROMPT } from 'src/shared/constants/review-system-prompt.constant';
 import { REVIEW_DISCUSSION_FOLLOWUP_APPEND } from 'src/shared/constants/review-discussion-followup.constant';
 import { PROTECT_SYSTEM_PROMPT } from 'src/shared/constants/protect-system-prompt.constant';
@@ -44,9 +49,7 @@ export class ReviewService implements OnModuleInit {
   }
 
   async reviewChanges(request: ReviewRequest): Promise<ReviewChangesOutput> {
-    const hasDiscussion = Boolean(
-      request.existingDiscussion?.trim().length,
-    );
+    const hasDiscussion = Boolean(request.existingDiscussion?.trim().length);
     const prompt = this.buildPrompt(request);
     const systemPrompt = hasDiscussion
       ? `${REVIEW_SYSTEM_PROMPT}${REVIEW_DISCUSSION_FOLLOWUP_APPEND}`
@@ -80,7 +83,12 @@ export class ReviewService implements OnModuleInit {
     const responseText =
       message.content[0].type === 'text' ? message.content[0].text : '';
 
-    const result = this.parseResponse(responseText);
+    const result = this.parseResponse(
+      responseText,
+      request.priorBotComments,
+      request.prTitle,
+      hasDiscussion,
+    );
     return {
       result,
       metrics: {
@@ -178,7 +186,7 @@ export class ReviewService implements OnModuleInit {
             : null;
 
         if (stance === 'pushback' && replyBody) {
-          replyBody = `${replyBody}\n\n---\n*PR protect mode · ${MODEL_DISPLAY_NAME} 🤖*`;
+          replyBody = `${replyBody}\n\n---\n*PR protect mode · ${MODEL_DISPLAY_NAME} 🔮⚡*`;
         }
 
         byKey.set(`${kind}:${id}`, {
@@ -233,12 +241,30 @@ export class ReviewService implements OnModuleInit {
       prompt += `\`\`\`diff\n${safePatch}\n\`\`\`\n\n`;
     }
 
+    const priorCriticalHigh = (request.priorBotComments ?? []).filter(
+      (c) => c.severity === 'critical' || c.severity === 'high',
+    );
+    if (priorCriticalHigh.length) {
+      prompt += `\n## Prior bot critical/high inline comments — check resolution status\n\n`;
+      prompt += `For each comment below, determine if the issue has been addressed in the current diff and report it in \`priorIssuesStatus\`. Do NOT re-raise these as new inline \`comments\` entries.\n\n`;
+      for (const c of priorCriticalHigh) {
+        const loc = `${sanitizeForPrompt(c.path, 500)}${c.line != null ? `:${c.line}` : ''}`;
+        prompt += `- review_comment_id=${c.review_comment_id} severity=${c.severity} at \`${loc}\`\n`;
+        prompt += `  "${sanitizeForPrompt(c.bodyExcerpt, 300)}"\n\n`;
+      }
+    }
+
     prompt += `\nPlease review these changes and respond with the JSON format specified in your instructions.`;
 
     return prompt;
   }
 
-  private parseResponse(text: string): ReviewResult {
+  private parseResponse(
+    text: string,
+    priorBotComments?: PriorBotComment[],
+    prTitle?: string,
+    isFollowUp?: boolean,
+  ): ReviewResult {
     try {
       const jsonStr = extractFirstJsonObject(text);
       if (!jsonStr) {
@@ -247,7 +273,7 @@ export class ReviewService implements OnModuleInit {
 
       const parsed = JSON.parse(jsonStr);
 
-      const comments = (parsed.comments || []).map((c: any) => ({
+      const rawComments = (parsed.comments || []).map((c: any) => ({
         path: c.path,
         line: Number(c.line),
         side: 'RIGHT' as const,
@@ -255,8 +281,70 @@ export class ReviewService implements OnModuleInit {
         severity: this.normalizeSeverity(c.severity),
       }));
 
-      const severityCounts = this.calculateSeverityCounts(comments);
-      const event = this.determineReviewEvent(severityCounts);
+      // Only post critical and high severity as inline comments; medium is listed in the summary only.
+      const mediumComments = rawComments.filter(
+        (c: { severity: string }) => c.severity === 'medium',
+      );
+      const criticalHighComments = rawComments.filter(
+        (c: { severity: string }) =>
+          c.severity === 'critical' || c.severity === 'high',
+      );
+      if (mediumComments.length > 0) {
+        this.logger.log(
+          `Suppressed ${mediumComments.length} medium inline comment(s) — medium issues are summary-only`,
+        );
+      }
+
+      // Deduplicate: skip new inline comments on lines the bot already commented on.
+      const existingBotLocations = new Set(
+        (priorBotComments ?? [])
+          .filter((c) => c.line != null)
+          .map((c) => `${c.path}:${c.line}`),
+      );
+      const comments =
+        existingBotLocations.size > 0
+          ? criticalHighComments.filter(
+              (c: { path: string; line: number }) =>
+                !existingBotLocations.has(`${c.path}:${c.line}`),
+            )
+          : criticalHighComments;
+
+      if (criticalHighComments.length !== comments.length) {
+        this.logger.log(
+          `Deduped ${criticalHighComments.length - comments.length} inline comment(s) already posted by the bot`,
+        );
+      }
+
+      // Severity counts include medium from raw comments so the summary breakdown is accurate.
+      const severityCounts = this.calculateSeverityCounts(rawComments);
+
+      // Parse prior issues status from AI response.
+      const priorIssuesStatus = this.parsePriorIssuesStatus(
+        parsed.priorIssuesStatus,
+      );
+
+      // Determine event considering both new comments and unresolved prior issues.
+      // Deferred-by-author items are excluded — the author explicitly acknowledged them
+      // and they should not block approval.
+      const trulyUnresolved = priorIssuesStatus.filter(
+        (s) => !s.resolved && !s.deferredByAuthor,
+      );
+      const adjustedCounts = {
+        critical:
+          severityCounts.critical +
+          trulyUnresolved.filter((s) => s.severity === 'critical').length,
+        high:
+          severityCounts.high +
+          trulyUnresolved.filter((s) => s.severity === 'high').length,
+        medium: severityCounts.medium,
+      };
+      // In a re-review where all prior critical/high issues are resolved, new high issues
+      // are noted but should not block the merge — the author addressed everything they were asked to fix.
+      const allPriorResolved =
+        isFollowUp &&
+        priorIssuesStatus.length > 0 &&
+        trulyUnresolved.length === 0;
+      const event = this.determineReviewEvent(adjustedCounts, allPriorResolved);
 
       const whatsGood =
         typeof parsed.whatsGood === 'string' ? parsed.whatsGood.trim() : '';
@@ -272,24 +360,61 @@ export class ReviewService implements OnModuleInit {
           severityCounts,
           whatsGood,
           keyChanges,
+          priorIssuesStatus,
+          mediumComments,
+          prTitle,
+          isFollowUp,
+          allPriorResolved,
         ),
         comments,
         event,
         severityCounts,
-        ...(repliesToReviewComments?.length
-          ? { repliesToReviewComments }
-          : {}),
+        ...(priorIssuesStatus.length ? { priorIssuesStatus } : {}),
+        ...(repliesToReviewComments?.length ? { repliesToReviewComments } : {}),
         ...(repliesToIssueComments?.length ? { repliesToIssueComments } : {}),
       };
     } catch (error: any) {
       this.logger.warn(`Failed to parse AI response: ${error.message}`);
       return {
-        summary: `${text.slice(0, 2000)}\n\n---\n*Reviewed by ${MODEL_DISPLAY_NAME} 🤖*`,
+        summary: `${text.slice(0, 2000)}\n\n---\n*Reviewed by ${MODEL_DISPLAY_NAME} 🔮⚡*`,
         comments: [],
         event: 'COMMENT',
         severityCounts: { critical: 0, high: 0, medium: 0 },
       };
     }
+  }
+
+  private parsePriorIssuesStatus(raw: unknown): PriorIssueStatus[] {
+    if (!Array.isArray(raw)) return [];
+    const seen = new Set<number>();
+    const results: PriorIssueStatus[] = [];
+    for (const r of raw) {
+      const id = Number(r?.review_comment_id);
+      if (!Number.isFinite(id) || id < 1) continue;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const severity = this.normalizeSeverity(r?.severity);
+      if (severity === 'medium') continue;
+      const title =
+        typeof r?.title === 'string' && r.title.trim()
+          ? r.title.trim()
+          : 'Prior issue';
+      const resolved = Boolean(r?.resolved);
+      const deferredByAuthor = Boolean(r?.deferred_by_author);
+      const status_note =
+        typeof r?.status_note === 'string' && r.status_note.trim()
+          ? r.status_note.trim()
+          : undefined;
+      results.push({
+        review_comment_id: id,
+        severity,
+        title,
+        resolved,
+        deferredByAuthor,
+        status_note,
+      });
+    }
+    return results;
   }
 
   private parseFollowupReplies(parsed: any): {
@@ -302,8 +427,7 @@ export class ReviewService implements OnModuleInit {
     if (Array.isArray(rawR)) {
       for (const x of rawR.slice(0, max)) {
         const id = Number(x?.review_comment_id);
-        const body =
-          typeof x?.body === 'string' ? x.body.trim() : '';
+        const body = typeof x?.body === 'string' ? x.body.trim() : '';
         if (!Number.isFinite(id) || id < 1 || !body) continue;
         repliesToReviewComments.push({ review_comment_id: id, body });
       }
@@ -314,17 +438,14 @@ export class ReviewService implements OnModuleInit {
     if (Array.isArray(rawI)) {
       for (const x of rawI.slice(0, max)) {
         const id = Number(x?.issue_comment_id);
-        const body =
-          typeof x?.body === 'string' ? x.body.trim() : '';
+        const body = typeof x?.body === 'string' ? x.body.trim() : '';
         if (!Number.isFinite(id) || id < 1 || !body) continue;
         repliesToIssueComments.push({ issue_comment_id: id, body });
       }
     }
 
     return {
-      ...(repliesToReviewComments.length
-        ? { repliesToReviewComments }
-        : {}),
+      ...(repliesToReviewComments.length ? { repliesToReviewComments } : {}),
       ...(repliesToIssueComments.length ? { repliesToIssueComments } : {}),
     };
   }
@@ -346,17 +467,20 @@ export class ReviewService implements OnModuleInit {
         counts[comment.severity]++;
         return counts;
       },
-      { critical: 0, high: 0, medium: 0 }
+      { critical: 0, high: 0, medium: 0 },
     );
   }
 
-  private determineReviewEvent(severityCounts: {
-    critical: number;
-    high: number;
-    medium: number;
-  }): 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT' {
-    if (severityCounts.critical > 0 || severityCounts.high > 0) {
-      return 'REQUEST_CHANGES';
+  private determineReviewEvent(
+    severityCounts: { critical: number; high: number; medium: number },
+    allPriorResolved?: boolean,
+  ): 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT' {
+    if (severityCounts.critical > 0) return 'REQUEST_CHANGES';
+
+    if (severityCounts.high > 0) {
+      // When re-reviewing and all prior issues are resolved, new high findings
+      // are informational — the author addressed everything they were asked to fix.
+      return allPriorResolved ? 'APPROVE' : 'REQUEST_CHANGES';
     }
 
     return 'APPROVE';
@@ -370,7 +494,8 @@ export class ReviewService implements OnModuleInit {
       .filter(
         (r): r is { change: string; before: string; after: string } =>
           r &&
-          typeof r.change === 'string' && r.change.trim() &&
+          typeof r.change === 'string' &&
+          r.change.trim() &&
           typeof r.before === 'string' &&
           typeof r.after === 'string',
       )
@@ -403,48 +528,146 @@ export class ReviewService implements OnModuleInit {
     severityCounts: { critical: number; high: number; medium: number },
     whatsGood: string,
     keyChanges: Array<{ change: string; before: string; after: string }> = [],
+    priorIssuesStatus: PriorIssueStatus[] = [],
+    mediumComments: Array<{ path: string; line: number; body: string }> = [],
+    prTitle?: string,
+    isFollowUp?: boolean,
+    allPriorResolved?: boolean,
   ): string {
     const keyChangesSection = this.buildKeyChangesTable(keyChanges);
+    const priorStatusSection =
+      this.buildPriorIssuesStatusTable(priorIssuesStatus);
 
-    const goodSection =
-      whatsGood.length > 0
-        ? `\n\n## What's Good ✅\n\n${whatsGood}\n`
-        : '';
+    const newTotal = Object.values(severityCounts).reduce((a, b) => a + b, 0);
+    // Only truly unresolved (not deferred by author) contribute to REQUEST_CHANGES conclusion.
+    const unresolvedPrior = priorIssuesStatus.filter(
+      (s) => !s.resolved && !s.deferredByAuthor,
+    );
 
-    const total = Object.values(severityCounts).reduce((a, b) => a + b, 0);
-    const intro = `${summary}${keyChangesSection}${goodSection}`;
+    const titleHeading =
+      isFollowUp && prTitle ? `## Re-Review: ${prTitle}\n\n` : '';
+    const intro = `${titleHeading}${summary}${keyChangesSection}`;
 
-    if (total === 0) {
-      return `${intro}\n\n✅ **No issues found** - Code looks good!\n\n---\n*Reviewed by ${MODEL_DISPLAY_NAME} 🤖*`;
+    const footer = `\n\n---\n*Reviewed by ${MODEL_DISPLAY_NAME} 🔮⚡*`;
+
+    if (newTotal === 0 && unresolvedPrior.length === 0) {
+      const allResolved =
+        priorIssuesStatus.length > 0 &&
+        priorIssuesStatus.every((s) => s.resolved);
+      const someDeferred = priorIssuesStatus.some(
+        (s) => !s.resolved && s.deferredByAuthor,
+      );
+      const noIssuesMsg = allResolved
+        ? '✅ **All previous issues resolved** — Code looks good!'
+        : someDeferred
+          ? '✅ **No blocking issues** — Prior issues deferred by author are noted above.'
+          : '✅ **No issues found** - Code looks good!';
+      return `${intro}${priorStatusSection}\n\n${noIssuesMsg}${footer}`;
     }
 
-    let severityBreakdown = '\n\n## Issue Severity Breakdown\n\n';
-    severityBreakdown += '| Severity | Count |\n';
-    severityBreakdown += '|----------|-------|\n';
-    
-    if (severityCounts.critical > 0) {
-      severityBreakdown += `| ${SEVERITY_BADGE_CRITICAL} | ${severityCounts.critical} |\n`;
-    }
-    if (severityCounts.high > 0) {
-      severityBreakdown += `| ${SEVERITY_BADGE_HIGH} | ${severityCounts.high} |\n`;
-    }
-    if (severityCounts.medium > 0) {
-      severityBreakdown += `| ${SEVERITY_BADGE_MEDIUM} | ${severityCounts.medium} |\n`;
+    const criticalHighTotal = severityCounts.critical + severityCounts.high;
+    let severityBreakdown = '';
+    if (criticalHighTotal > 0) {
+      severityBreakdown = '\n\n## Issue Severity Breakdown\n\n';
+      severityBreakdown += '| Severity | Count |\n';
+      severityBreakdown += '|----------|-------|\n';
+      if (severityCounts.critical > 0) {
+        severityBreakdown += `| ${SEVERITY_BADGE_CRITICAL} | ${severityCounts.critical} |\n`;
+      }
+      if (severityCounts.high > 0) {
+        severityBreakdown += `| ${SEVERITY_BADGE_HIGH} | ${severityCounts.high} |\n`;
+      }
     }
 
-    const conclusion = this.buildConclusion(severityCounts);
-    const footer = `\n\n---\n*Reviewed by ${MODEL_DISPLAY_NAME} 🤖*`;
-    
-    return `${intro}${severityBreakdown}\n${conclusion}${footer}`;
+    const mediumSection = this.buildMediumIssuesTable(mediumComments);
+
+    const conclusion = this.buildConclusion(
+      severityCounts,
+      priorIssuesStatus,
+      allPriorResolved,
+    );
+
+    return `${intro}${priorStatusSection}${severityBreakdown}${mediumSection}\n${conclusion}${footer}`;
   }
 
-  private buildConclusion(severityCounts: { critical: number; high: number; medium: number }): string {
+  private buildMediumIssuesTable(
+    mediumComments: Array<{ path: string; line: number; body: string }>,
+  ): string {
+    if (mediumComments.length === 0) return '';
+
+    const rows = mediumComments.map((c, idx) => {
+      const filename = c.path.split('/').pop() ?? c.path;
+      const issue = c.body.split('\n')[0].trim().slice(0, 150);
+      return `| ${idx + 1} | ${SEVERITY_BADGE_MEDIUM} | \`${filename}\` | ${c.line} | ${issue} |`;
+    });
+
+    return (
+      '\n\n## Medium Issues\n\n' +
+      '| # | Severity | File | Line | Issue |\n' +
+      '|---|----------|------|------|-------|\n' +
+      rows.join('\n') +
+      '\n'
+    );
+  }
+
+  private buildPriorIssuesStatusTable(
+    priorIssuesStatus: PriorIssueStatus[],
+  ): string {
+    if (priorIssuesStatus.length === 0) return '';
+
+    const rows = priorIssuesStatus.map((s) => {
+      const severityLabel =
+        s.severity === 'critical'
+          ? SEVERITY_BADGE_CRITICAL
+          : SEVERITY_BADGE_HIGH;
+      const statusLabel = s.resolved
+        ? '✅ Passed'
+        : s.deferredByAuthor
+          ? '⚠️ Pass (with condition)'
+          : '❌ Not Passed';
+      const note = s.status_note ?? '';
+      return `| ${severityLabel} | ${s.title} | ${statusLabel} | ${note} |`;
+    });
+
+    return (
+      '\n\n## Prior Issues Status\n\n' +
+      '| Severity | Issue | Status | Comment |\n' +
+      '|---|---|---|---|\n' +
+      rows.join('\n') +
+      '\n'
+    );
+  }
+
+  private buildConclusion(
+    severityCounts: { critical: number; high: number; medium: number },
+    priorIssuesStatus: PriorIssueStatus[] = [],
+    allPriorResolved?: boolean,
+  ): string {
+    const trulyUnresolved = priorIssuesStatus.filter(
+      (s) => !s.resolved && !s.deferredByAuthor,
+    );
+    const deferred = priorIssuesStatus.filter(
+      (s) => !s.resolved && s.deferredByAuthor,
+    );
+
     if (severityCounts.critical > 0) {
       return [
         '**❌ Conclusion**: REQUEST_CHANGES — critical issues found.',
         '',
         '**Next steps**:',
         '- Fix all **critical** items before merging.',
+      ].join('\n');
+    }
+
+    if (severityCounts.high > 0 && allPriorResolved) {
+      return [
+        '**✅ Conclusion**: APPROVE — all prior issues resolved.',
+        '',
+        `**Notes**: ${severityCounts.high} new high suggestion(s) found in this review — not blocking since all prior issues have been addressed, but worth considering.`,
+        '',
+        '**Recommended**:',
+        '- Address new high items if they are low effort or in a risky area.',
+        '- Merge when ready.',
       ].join('\n');
     }
 
@@ -457,6 +680,24 @@ export class ReviewService implements OnModuleInit {
       ].join('\n');
     }
 
+    if (trulyUnresolved.length > 0) {
+      return [
+        '**❌ Conclusion**: REQUEST_CHANGES — prior issues not yet resolved.',
+        '',
+        '**Next steps**:',
+        '- Address all ❌ items in the **Prior Issues Status** table above.',
+      ].join('\n');
+    }
+
+    if (deferred.length > 0) {
+      return [
+        '**✅ Conclusion**: APPROVE — prior issues deferred by author for this iteration.',
+        '',
+        '**Next steps**:',
+        '- Address all ⚠️ items in the **Prior Issues Status** table above before real business logic is implemented.',
+      ].join('\n');
+    }
+
     if (severityCounts.medium > 0) {
       return [
         '**✅ Conclusion**: APPROVE — no critical/high issues.',
@@ -464,8 +705,8 @@ export class ReviewService implements OnModuleInit {
         `**Notes**: ${severityCounts.medium} medium suggestion(s) included.`,
         '',
         '**Recommended**:',
-        '- Address medium items if they’re low effort or in a risky area.',
-        '- If you’re merging now, ensure tests/CI are green and behavior is unchanged.',
+        "- Address medium items if they're low effort or in a risky area.",
+        "- If you're merging now, ensure tests/CI are green and behavior is unchanged.",
       ].join('\n');
     }
 

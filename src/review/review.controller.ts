@@ -2,10 +2,18 @@ import {
   Controller,
   Post,
   Body,
+  Headers,
   HttpCode,
   BadRequestException,
   Logger,
+  OnModuleInit,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import {
+  SEVERITY_BADGE_CRITICAL,
+  SEVERITY_BADGE_HIGH,
+  SEVERITY_BADGE_MEDIUM,
+} from 'src/shared/constants/severity-badges.constant';
 import { GithubService } from 'src/github/github.service';
 import { ReviewService } from 'src/review/review.service';
 import { ProtectCommentInput } from 'src/review/interfaces/protect.interface';
@@ -13,6 +21,8 @@ import { LogStashService } from 'src/shared/services/log-stash.service';
 import { buildPrDiscussionContext } from 'src/review/utils/build-pr-discussion-context.util';
 import {
   buildInstantApproveIgnoredOnlyReviewResult,
+  buildInstantApproveZeroFilesReviewResult,
+  buildInstantApproveBranchRouteReviewResult,
   metricsForIgnoredPatternFilesOnly,
 } from 'src/review/utils/instant-approve-ignored-only.util';
 import { buildNoReviewableFilesReviewResult } from 'src/review/utils/no-reviewable-files.util';
@@ -29,22 +39,41 @@ const MAX_PROTECT_COMMENTS = 50;
 type PrWebhookIntent = 'review' | 'protect';
 
 @Controller('review')
-export class ReviewController {
+export class ReviewController implements OnModuleInit {
   private readonly logger = new Logger(ReviewController.name);
+  /** Parsed set of "headBranch:baseBranch" pairs that skip LLM review and auto-approve. */
+  private autoApproveBranchRoutes = new Set<string>();
 
   constructor(
     private readonly githubService: GithubService,
     private readonly reviewService: ReviewService,
     private readonly logStashService: LogStashService,
+    private readonly configService: ConfigService,
   ) {}
+
+  onModuleInit() {
+    const raw = this.configService.get<string>('review.autoApproveBranchRoutes') ?? '';
+    for (const pair of raw.split(',')) {
+      const trimmed = pair.trim();
+      if (trimmed) this.autoApproveBranchRoutes.add(trimmed.toLowerCase());
+    }
+    if (this.autoApproveBranchRoutes.size > 0) {
+      this.logger.log(
+        `Auto-approve branch routes: ${[...this.autoApproveBranchRoutes].join(', ')}`,
+      );
+    }
+  }
 
   @Post('pr')
   @HttpCode(200)
   reviewPullRequest(
     @Body() body: ReviewPRRequest,
+    @Headers() headers: Record<string, string>,
   ) {
 
+    this.logger.log(`Incoming request headers: ${JSON.stringify(headers)}`);
     this.logger.log(`Incoming request body: ${JSON.stringify(body)}`);
+    
     const rawText = typeof body?.text === 'string' ? body.text.trim() : '';
     const requester =
       typeof body?.requester === 'string' && body.requester.trim()
@@ -215,8 +244,47 @@ export class ReviewController {
     try {
       const prData = await this.githubService.getPullRequest(owner, repo, prNumber);
 
+      // Auto-approve branch routes: no LLM review, submit APPROVE immediately.
+      const branchRouteKey = `${prData.head.ref.toLowerCase()}:${prData.base.ref.toLowerCase()}`;
+      if (this.autoApproveBranchRoutes.has(branchRouteKey)) {
+        this.logger.log(
+          `PR #${prNumber}: branch route ${prData.head.ref} → ${prData.base.ref} is auto-approved`,
+        );
+        const reviewResult = buildInstantApproveBranchRouteReviewResult(
+          prData.head.ref,
+          prData.base.ref,
+        );
+        await this.githubService.submitReview(
+          owner,
+          repo,
+          prNumber,
+          prData.head.sha,
+          reviewResult,
+        );
+        const endedAt = new Date();
+        await this.logStashService.appendReviewEntry(
+          this.logStashService.composeReviewEntry({
+            startedAt,
+            endedAt,
+            llmSeconds: 0,
+            prUrl: `https://github.com/${owner}/${repo}/pull/${prNumber}`,
+            prOwner: prData.authorLogin,
+            requester: this.logStashService.resolveRequester(requester),
+            event: reviewResult.event,
+            isFirstReview: false,
+            diffChars: 0,
+            conversationChars: 0,
+            filesCount: 0,
+            languages: {},
+          }),
+        );
+        this.logger.log(`Auto-approve submitted for PR #${prNumber}`);
+        return;
+      }
+
       const {
         reviewableFiles,
+        zeroFilesChanged,
         onlyIgnoredPatternFiles,
         ignoredPatternFilesWithPatch,
         skippedPatchFilesForMetrics,
@@ -227,7 +295,11 @@ export class ReviewController {
         prNumber,
       );
 
-      if (onlyIgnoredPatternFiles) {
+      if (zeroFilesChanged) {
+        this.logger.log(
+          `PR #${prNumber}: zero file changes; auto-approving`,
+        );
+      } else if (onlyIgnoredPatternFiles) {
         this.logger.log(
           `PR #${prNumber}: only IGNORE_PATTERNS files with diffs; auto-approving`,
         );
@@ -261,9 +333,34 @@ export class ReviewController {
       const existingDiscussion =
         discussionText.length > 0 ? discussionText : undefined;
 
+      // Extract prior inline comments by this bot (all severities) for dedup + status table.
+      // Deduplicate by (path, line) — keep only the most recent comment per location so
+      // the AI never sees two entries for the same line and produces duplicate table rows.
+      const botCommentsByLocation = new Map<string, { review_comment_id: number; severity: 'critical' | 'high' | 'medium'; path: string; line: number | null; bodyExcerpt: string }>();
+      for (const c of reviewComments) {
+        if (c.user?.login !== myLogin || c.in_reply_to_id != null) continue;
+        const severity = this.parseSeverityFromCommentBody(c.body);
+        if (!severity) continue;
+        const key = `${c.path}:${c.line}`;
+        const existing = botCommentsByLocation.get(key);
+        if (!existing || c.id > existing.review_comment_id) {
+          botCommentsByLocation.set(key, {
+            review_comment_id: c.id,
+            severity,
+            path: c.path,
+            line: c.line,
+            bodyExcerpt: this.extractCommentBodyExcerpt(c.body),
+          });
+        }
+      }
+      const priorBotComments = [...botCommentsByLocation.values()];
+
       let reviewResult;
       let metrics;
-      if (onlyIgnoredPatternFiles) {
+      if (zeroFilesChanged) {
+        reviewResult = buildInstantApproveZeroFilesReviewResult();
+        metrics = metricsForIgnoredPatternFilesOnly([]);
+      } else if (onlyIgnoredPatternFiles) {
         reviewResult = buildInstantApproveIgnoredOnlyReviewResult();
         metrics = metricsForIgnoredPatternFilesOnly(
           ignoredPatternFilesWithPatch,
@@ -282,6 +379,7 @@ export class ReviewController {
           headBranch: prData.head.ref,
           files: reviewableFiles,
           ...(existingDiscussion ? { existingDiscussion } : {}),
+          ...(priorBotComments.length ? { priorBotComments } : {}),
         });
         reviewResult = rv.result;
         metrics = rv.metrics;
@@ -514,6 +612,24 @@ export class ReviewController {
     if (q !== -1) cut = Math.min(cut, q);
     if (h !== -1) cut = Math.min(cut, h);
     return url.slice(0, cut);
+  }
+
+  /** Parses the severity label from a bot-formatted inline comment body. */
+  private parseSeverityFromCommentBody(body: string): 'critical' | 'high' | 'medium' | null {
+    if (body.startsWith(SEVERITY_BADGE_CRITICAL)) return 'critical';
+    if (body.startsWith(SEVERITY_BADGE_HIGH)) return 'high';
+    if (body.startsWith(SEVERITY_BADGE_MEDIUM)) return 'medium';
+    return null;
+  }
+
+  /**
+   * Strips the severity badge header (first line + blank line) from a bot comment body
+   * and returns a short excerpt for use in prompts.
+   */
+  private extractCommentBodyExcerpt(body: string): string {
+    const lines = body.split('\n');
+    const withoutBadge = lines.slice(2).join('\n');
+    return withoutBadge.slice(0, 200).trim();
   }
 
   private isGithubPullRequestUrl(candidate: string): boolean {

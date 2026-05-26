@@ -10,7 +10,11 @@ import {
   GithubPullRequestReview,
   PrReviewState,
 } from 'src/github/interfaces/github.interface';
-import { BINARY_EXTENSIONS, IGNORE_PATTERNS, MAX_FILES } from 'src/shared/constants/ignored-files.constant';
+import {
+  BINARY_EXTENSIONS,
+  IGNORE_PATTERNS,
+  MAX_FILES,
+} from 'src/shared/constants/ignored-files.constant';
 import {
   SEVERITY_BADGE_CRITICAL,
   SEVERITY_BADGE_HIGH,
@@ -46,12 +50,15 @@ export class GithubService implements OnModuleInit {
     repo: string,
     prNumber: number,
   ): Promise<GithubPullReviewComment[]> {
-    const data = await this.octokit.paginate(this.octokit.pulls.listReviewComments, {
-      owner,
-      repo,
-      pull_number: prNumber,
-      per_page: 100,
-    });
+    const data = await this.octokit.paginate(
+      this.octokit.pulls.listReviewComments,
+      {
+        owner,
+        repo,
+        pull_number: prNumber,
+        per_page: 100,
+      },
+    );
 
     return data.map((c) => ({
       id: c.id,
@@ -147,11 +154,7 @@ export class GithubService implements OnModuleInit {
     });
   }
 
-  async getPullRequest(
-    owner: string,
-    repo: string,
-    prNumber: number,
-  ) {
+  async getPullRequest(owner: string, repo: string, prNumber: number) {
     const { data } = await this.octokit.pulls.get({
       owner,
       repo,
@@ -216,15 +219,16 @@ export class GithubService implements OnModuleInit {
         IGNORE_PATTERNS.some((pattern) => pattern.test(file.filename)),
       );
 
-    const ignoredPatternFilesWithPatch: PullRequestFile[] = onlyIgnoredPatternFiles
-      ? withPatchNotRemoved.map((file) => ({
-          filename: file.filename,
-          status: file.status,
-          additions: file.additions,
-          deletions: file.deletions,
-          patch: file.patch,
-        }))
-      : [];
+    const ignoredPatternFilesWithPatch: PullRequestFile[] =
+      onlyIgnoredPatternFiles
+        ? withPatchNotRemoved.map((file) => ({
+            filename: file.filename,
+            status: file.status,
+            additions: file.additions,
+            deletions: file.deletions,
+            patch: file.patch,
+          }))
+        : [];
 
     const filtered = withPatchNotRemoved.filter((file) => {
       if (IGNORE_PATTERNS.some((pattern) => pattern.test(file.filename))) {
@@ -251,18 +255,20 @@ export class GithubService implements OnModuleInit {
     const noReviewableButNotIgnoredOnly =
       !onlyIgnoredPatternFiles && reviewableFiles.length === 0;
 
-    const skippedPatchFilesForMetrics: PullRequestFile[] = noReviewableButNotIgnoredOnly
-      ? withPatchNotRemoved.map((file) => ({
-          filename: file.filename,
-          status: file.status,
-          additions: file.additions,
-          deletions: file.deletions,
-          patch: file.patch,
-        }))
-      : [];
+    const skippedPatchFilesForMetrics: PullRequestFile[] =
+      noReviewableButNotIgnoredOnly
+        ? withPatchNotRemoved.map((file) => ({
+            filename: file.filename,
+            status: file.status,
+            additions: file.additions,
+            deletions: file.deletions,
+            patch: file.patch,
+          }))
+        : [];
 
     return {
       reviewableFiles,
+      zeroFilesChanged: data.length === 0,
       onlyIgnoredPatternFiles,
       ignoredPatternFilesWithPatch,
       skippedPatchFilesForMetrics,
@@ -331,7 +337,9 @@ export class GithubService implements OnModuleInit {
         error.message.includes('approve your own pull request');
 
       if (isOwnPRCannotRequestChanges && review.event === 'REQUEST_CHANGES') {
-        this.logger.warn('Cannot request changes on own PR. Posting COMMENT instead.');
+        this.logger.warn(
+          'Cannot request changes on own PR. Posting COMMENT instead.',
+        );
         await this.octokit.pulls.createReview({
           owner,
           repo,
@@ -385,7 +393,7 @@ export class GithubService implements OnModuleInit {
     allowedReviewCommentIds: Set<number>,
     allowedIssueCommentIds: Set<number>,
   ): Promise<void> {
-    const footer = `\n\n---\n*Follow-up · ${MODEL_DISPLAY_NAME} 🤖*`;
+    const footer = `\n\n---\n*Follow-up · ${MODEL_DISPLAY_NAME} 🔮⚡*`;
     const max = 5;
 
     for (const r of (review.repliesToReviewComments ?? []).slice(0, max)) {
@@ -434,7 +442,10 @@ export class GithubService implements OnModuleInit {
     }
   }
 
-  private formatInlineCommentBody(body: string, severity: ReviewResult['comments'][number]['severity']): string {
+  private formatInlineCommentBody(
+    body: string,
+    severity: ReviewResult['comments'][number]['severity'],
+  ): string {
     const header =
       severity === 'critical'
         ? SEVERITY_BADGE_CRITICAL

@@ -3,6 +3,18 @@ import {
   ReviewResult,
 } from 'src/github/interfaces/github.interface';
 
+/**
+ * A prior critical/high inline comment posted by the bot on this PR.
+ * Used for server-side deduplication and AI status-check table generation.
+ */
+export interface PriorBotComment {
+  review_comment_id: number;
+  severity: 'critical' | 'high' | 'medium';
+  path: string;
+  line: number | null;
+  bodyExcerpt: string;
+}
+
 export interface ReviewRequest {
   prTitle: string;
   prDescription: string;
@@ -14,6 +26,11 @@ export interface ReviewRequest {
    * and optionally emit `repliesToReviewComments` / `repliesToIssueComments` on the result.
    */
   existingDiscussion?: string;
+  /**
+   * Prior critical/high inline comments the bot already posted on this PR.
+   * Used to skip re-posting duplicates and to generate the status check table.
+   */
+  priorBotComments?: PriorBotComment[];
 }
 
 /** Metrics collected during `reviewChanges` (LLM + diff stats). */

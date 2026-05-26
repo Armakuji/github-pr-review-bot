@@ -9,6 +9,11 @@ export default () => ({
   },
   review: {
     triggerMode: process.env.REVIEW_TRIGGER_MODE || 'both',
+    /**
+     * Comma-separated list of `head:base` branch pairs that are auto-approved
+     * without LLM review, e.g. "beta:develop,hotfix:main".
+     */
+    autoApproveBranchRoutes: process.env.AUTO_APPROVE_BRANCH_ROUTES || '',
   },
   logStash: {
     /** IANA timezone for timestamps and monthly log file name (default Asia/Bangkok, +07:00). */

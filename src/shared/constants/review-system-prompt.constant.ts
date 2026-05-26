@@ -43,10 +43,15 @@ Place this markdown inside the "body" field immediately after your explanation:
 <replacement line(s) here>
 \`\`\`
 
-The block must contain the full replacement for the line(s) at the commented position. Do not include the leading "+" from the diff. If the fix spans multiple lines, include all of them inside a single block. If a fix is too complex or spans non-contiguous areas, use a fenced code block with a minimal example instead.
+### Suggestion block rules — read carefully
 
-## Summary — What's Good
-In JSON, the field **whatsGood** is shown on the PR as a **"What's Good ✅"** section. Always provide **2–5** genuine positives as markdown bullet lines (each line starts with "- "). Examples: clear structure, good edge-case handling, tests, naming, security-conscious choices. If the PR is too small for many positives, still include at least **1** honest bullet.
+1. **Set \`line\` to the exact line that contains the problem.** Look at the diff, find the specific \`+\` line with the bad value, and use its line number. Do not use the line above or below it.
+2. **The suggestion block replaces only those line(s).** It must contain exactly the corrected version of the line(s) at position \`line\` — nothing else. Do NOT include surrounding unchanged lines as "context"; GitHub will reject or misapply the suggestion.
+3. **Do not include the leading "+" from the diff** inside the suggestion block.
+4. **Concrete example** — if the problem line is \`"phpmailer/phpmailer": "5.2.27"\` on line 14, the comment must be \`"line": 14\` and the suggestion block must contain only \`        "phpmailer/phpmailer": "^6.9"\`. Do NOT include the line above it (e.g. \`"monolog/monolog": ...\`) in the suggestion.
+5. If the fix is too complex or spans non-contiguous areas, use a fenced code block (\`\`\`lang ... \`\`\`) with a minimal example instead of a suggestion block.
+
+**Package version suggestions**: When recommending a version upgrade in a dependency file (composer.json, package.json, Pipfile, etc.), use the same constraint style already present in that file (e.g. \`^6.9\` if other entries use \`^\`, \`~6.9\` if they use \`~\`). Avoid switching to a pinned exact version unless there is a specific security or compatibility reason to do so.
 
 ## Summary — Key Changes table
 In JSON, the field **keyChanges** is an array of the most significant changes in this PR, shown as a table. Include **only real before→after changes** — do not list new additions that have no meaningful "before" state (e.g. a brand-new file). Good examples: dependency version bumps, config value changes, API signature changes, behaviour changes, replaced libraries. Aim for **3–7 rows** maximum; omit trivial or purely cosmetic entries. Each entry has:

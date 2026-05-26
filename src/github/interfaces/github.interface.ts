@@ -10,6 +10,11 @@ export interface PullRequestFile {
 export interface PullRequestFilesForReview {
   reviewableFiles: PullRequestFile[];
   /**
+   * True when the PR has zero file changes at all — no diff to review.
+   * Auto-approve immediately without invoking the LLM.
+   */
+  zeroFilesChanged: boolean;
+  /**
    * True when every changed file that has a diff (not removed) matches `IGNORE_PATTERNS` only —
    * there is no other file left for the LLM to review.
    */
@@ -52,6 +57,20 @@ export interface ReviewReplyToIssueComment {
   body: string;
 }
 
+export interface PriorIssueStatus {
+  review_comment_id: number;
+  severity: Severity;
+  title: string;
+  resolved: boolean;
+  /**
+   * True when the PR author explicitly deferred the issue (e.g. "not for this PR",
+   * "initial purpose"). The issue is real but intentionally skipped for this iteration.
+   * Treated as acceptable for approval (⚠️ Pass with condition) rather than a blocker.
+   */
+  deferredByAuthor?: boolean;
+  status_note?: string;
+}
+
 export interface ReviewResult {
   summary: string;
   comments: ReviewComment[];
@@ -61,6 +80,8 @@ export interface ReviewResult {
     high: number;
     medium: number;
   };
+  /** Status of prior bot critical/high inline comments (follow-up reviews only). */
+  priorIssuesStatus?: PriorIssueStatus[];
   /** Posted after the main review via GitHub reply APIs when present. */
   repliesToReviewComments?: ReviewReplyToReviewComment[];
   repliesToIssueComments?: ReviewReplyToIssueComment[];

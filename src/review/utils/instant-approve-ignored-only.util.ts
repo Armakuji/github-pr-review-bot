@@ -6,6 +6,37 @@ import { MODEL_DISPLAY_NAME } from 'src/shared/constants/claude-model.constant';
 import { countLanguagesByFile } from 'src/shared/utils/file-language.util';
 import type { ReviewChangesMetrics } from 'src/review/interfaces/review.interface';
 
+/** GitHub review when the PR targets an auto-approved branch route (e.g. beta → develop). */
+export function buildInstantApproveBranchRouteReviewResult(
+  headBranch: string,
+  baseBranch: string,
+): ReviewResult {
+  return {
+    summary: [
+      `✅ **Auto-approved** — PRs from \`${headBranch}\` → \`${baseBranch}\` are approved automatically.`,
+      '',
+      `_${MODEL_DISPLAY_NAME} was not invoked._`,
+    ].join('\n'),
+    comments: [],
+    event: 'APPROVE',
+    severityCounts: { critical: 0, high: 0, medium: 0 },
+  };
+}
+
+/** GitHub review when the PR has zero file changes. */
+export function buildInstantApproveZeroFilesReviewResult(): ReviewResult {
+  return {
+    summary: [
+      '✅ **Auto-approved** — this PR has no file changes.',
+      '',
+      `_${MODEL_DISPLAY_NAME} was not invoked._`,
+    ].join('\n'),
+    comments: [],
+    event: 'APPROVE',
+    severityCounts: { critical: 0, high: 0, medium: 0 },
+  };
+}
+
 /** GitHub review when every patch file matches `IGNORE_PATTERNS` only. */
 export function buildInstantApproveIgnoredOnlyReviewResult(): ReviewResult {
   return {

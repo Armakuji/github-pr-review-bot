@@ -62,7 +62,6 @@ ANTHROPIC_API_KEY=sk-ant-xxxxxxxxxxxxxxxxxxxx
 PORT=3000
 ```
 
-
 | Variable                | Description                                                                         |
 | ----------------------- | ----------------------------------------------------------------------------------- |
 | `GITHUB_TOKEN`          | GitHub Personal Access Token with `repo` scope                                      |
@@ -70,7 +69,6 @@ PORT=3000
 | `ANTHROPIC_API_KEY`     | Your Anthropic API key                                                              |
 | `PORT`                  | Server port (default: `3000`)                                                       |
 | `REVIEW_TRIGGER_MODE`   | Trigger mode: `auto` (PR events only), `comment` (manual only), or `both` (default) |
-
 
 ### 3. Start the server
 
@@ -96,14 +94,12 @@ Copy the `https://` forwarding URL from the ngrok output.
 1. Go to your GitHub repository **Settings** > **Webhooks** > **Add webhook**
 2. Set the following:
 
-
 | Field            | Value                                                                      |
 | ---------------- | -------------------------------------------------------------------------- |
 | **Payload URL**  | `https://<your-ngrok-url>/webhook/github`                                  |
 | **Content type** | `application/json`                                                         |
 | **Secret**       | Same value as `GITHUB_WEBHOOK_SECRET` in your `.env`                       |
 | **Events**       | Select **"Pull requests"** AND **"Issue comments"** (for comment triggers) |
-
 
 1. Click **Add webhook**
 
@@ -113,13 +109,14 @@ The bot can be triggered in three ways:
 
 1. **Automatic (Push action)**: Reviews are automatically posted when a PR is opened, synchronized, or reopened
 2. **Manual (Comment trigger)**: Post a comment on any PR containing one of these keywords:
-  - `@review-bot`
-  - `@bot review`
-  - `/review`
-3. **Manual (API call)**: Send a POST request to `/review/pr` with `**review <url>`** (AI review) or `**protect <url>**` (push back on unfair comments) — same path, keyword picks the mode (see API Endpoints section)
+
+- `@review-bot`
+- `@bot review`
+- `/review`
+
+3. **Manual (API call)**: Send a POST request to `/review/pr` with `**review <url>`** (AI review) or `**protect <url>\*\*` (push back on unfair comments) — same path, keyword picks the mode (see API Endpoints section)
 
 ## API Endpoints
-
 
 | Method | Path              | Description                                                      |
 | ------ | ----------------- | ---------------------------------------------------------------- |
@@ -127,12 +124,11 @@ The bot can be triggered in three ways:
 | `POST` | `/webhook/github` | GitHub webhook receiver                                          |
 | `POST` | `/review/pr`      | Manual review (`review <url>`) or protect mode (`protect <url>`) |
 
-
 ### Manual PR Review & Protect
 
 Use the same endpoint; the **first word** selects the mode, then paste the PR URL:
 
-- `**review https://github.com/owner/repo/pull/123`** — run the AI code review on the PR.
+- `**review https://github.com/owner/repo/pull/123`\*\* — run the AI code review on the PR.
 - `**protect https://github.com/owner/repo/pull/123**` — analyze others’ comments and reply when they deserve pushback.
 
 **Endpoint:** `POST /review/pr`
@@ -162,19 +158,17 @@ The bot uses **Claude Sonnet 4** to analyze PR diffs. The AI is instructed to:
 - Keep comments **short and concise** (1-2 sentences)
 - Return structured JSON with file paths, line numbers, comments, and severity
 
-Each review includes a footer crediting the AI model used: *"Reviewed by Claude Sonnet 4 🤖"*
+Each review includes a footer crediting the AI model used: _"Reviewed by Claude Sonnet 4.6 🔮⚡"_
 
 ### Severity Levels
 
 The bot categorizes issues into three severity levels:
-
 
 | Severity        | Description                                                                       | Badge      |
 | --------------- | --------------------------------------------------------------------------------- | ---------- |
 | 🔴 **Critical** | Security vulnerabilities, data loss risks, critical bugs causing crashes/failures | `CRITICAL` |
 | 🟠 **High**     | Major bugs, significant performance issues, missing critical error handling       | `HIGH`     |
 | 🟡 **Medium**   | Moderate issues, code quality problems, potential bugs, minor performance issues  | `MEDIUM`   |
-
 
 ### Automatic Decision Making
 

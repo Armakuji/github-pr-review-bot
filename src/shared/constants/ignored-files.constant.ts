@@ -16,4 +16,4 @@ export const IGNORE_PATTERNS = [
   /readme\.md$/i,
 ];
 
-export const MAX_FILES = 30;
+export const MAX_FILES = 60;
