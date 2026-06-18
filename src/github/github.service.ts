@@ -184,13 +184,73 @@ export class GithubService implements OnModuleInit {
     prNumber: number,
     login: string,
   ): Promise<number> {
+    const { count } = await this.getBotReviewHistory(
+      owner,
+      repo,
+      prNumber,
+      login,
+    );
+    return count;
+  }
+
+  /**
+   * Bot review count and commit SHA of the most recent review (for incremental re-review).
+   */
+  async getBotReviewHistory(
+    owner: string,
+    repo: string,
+    prNumber: number,
+    login: string,
+  ): Promise<{ count: number; latestCommitSha: string | null }> {
     const data = await this.octokit.paginate(this.octokit.pulls.listReviews, {
       owner,
       repo,
       pull_number: prNumber,
       per_page: 100,
     });
-    return data.filter((r) => r.user?.login === login).length;
+
+    const botReviews = data.filter((r) => r.user?.login === login);
+    const withCommit = botReviews
+      .filter((r) => r.commit_id?.trim())
+      .sort(
+        (a, b) =>
+          new Date(b.submitted_at ?? 0).getTime() -
+          new Date(a.submitted_at ?? 0).getTime(),
+      );
+
+    return {
+      count: botReviews.length,
+      latestCommitSha: withCommit[0]?.commit_id ?? null,
+    };
+  }
+
+  /**
+   * Filenames changed between two commits (inclusive of base..head).
+   * Returns null when the compare API fails (caller should fall back to full PR diff).
+   */
+  async getChangedFilenamesBetween(
+    owner: string,
+    repo: string,
+    baseSha: string,
+    headSha: string,
+  ): Promise<Set<string> | null> {
+    if (!baseSha?.trim() || !headSha?.trim() || baseSha === headSha) {
+      return new Set();
+    }
+
+    try {
+      const { data } = await this.octokit.repos.compareCommitsWithBasehead({
+        owner,
+        repo,
+        basehead: `${baseSha}...${headSha}`,
+      });
+      return new Set((data.files ?? []).map((f) => f.filename));
+    } catch (error: any) {
+      this.logger.warn(
+        `Compare ${baseSha.slice(0, 7)}...${headSha.slice(0, 7)} failed: ${error?.message ?? error}`,
+      );
+      return null;
+    }
   }
 
   /**

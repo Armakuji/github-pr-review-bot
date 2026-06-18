@@ -31,6 +31,20 @@ export interface ReviewRequest {
    * Used to skip re-posting duplicates and to generate the status check table.
    */
   priorBotComments?: PriorBotComment[];
+  /**
+   * True when this bot account has already submitted at least one PR review on this PR.
+   * Controls the "Re-Review:" summary heading only.
+   */
+  isReReview?: boolean;
+  /** GitHub login of the PR author — used for the Review Sender intro. */
+  prAuthorLogin?: string;
+  /**
+   * True when only a subset of PR files is sent (changed since last bot review).
+   * The prompt includes guidance to reconcile prior issues from discussion/history.
+   */
+  incrementalReview?: boolean;
+  /** Commit SHA of the previous bot review (when `incrementalReview` is true). */
+  sinceReviewSha?: string;
 }
 
 /** Metrics collected during `reviewChanges` (LLM + diff stats). */

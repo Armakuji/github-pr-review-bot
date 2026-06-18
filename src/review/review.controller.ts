@@ -9,16 +9,13 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import {
-  SEVERITY_BADGE_CRITICAL,
-  SEVERITY_BADGE_HIGH,
-  SEVERITY_BADGE_MEDIUM,
-} from 'src/shared/constants/severity-badges.constant';
 import { GithubService } from 'src/github/github.service';
 import { ReviewService } from 'src/review/review.service';
 import { ProtectCommentInput } from 'src/review/interfaces/protect.interface';
 import { LogStashService } from 'src/shared/services/log-stash.service';
 import { buildPrDiscussionContext } from 'src/review/utils/build-pr-discussion-context.util';
+import { extractPriorBotComments } from 'src/review/utils/extract-prior-bot-comments.util';
+import { resolveIncrementalReviewFiles } from 'src/review/utils/resolve-incremental-review-files.util';
 import {
   buildInstantApproveIgnoredOnlyReviewResult,
   buildInstantApproveZeroFilesReviewResult,
@@ -85,7 +82,7 @@ export class ReviewController implements OnModuleInit {
       return {
         type: 'message',
         text: [
-          'Usopp reporting in!',
+          '🎯 **Usopp reporting in!**',
           '',
           'Start your message with **review** or **protect**, then the PR URL:',
           '',
@@ -103,7 +100,7 @@ export class ReviewController implements OnModuleInit {
       return {
         type: 'message',
         text: [
-          'Usopp reporting in!',
+          '🎯 **Usopp reporting in!**',
           '',
           'I can’t spot a GitHub Pull Request link after the keyword…',
           '',
@@ -121,7 +118,7 @@ export class ReviewController implements OnModuleInit {
       return {
         type: 'message',
         text: [
-          'Whoa there—Usopp almost tripped!',
+          '🤕 **Whoa there—Usopp almost tripped!**',
           '',
           `That link looks suspicious: \`${prUrl}\``,
           '',
@@ -137,12 +134,12 @@ export class ReviewController implements OnModuleInit {
       return {
         type: 'message',
         text: [
-          'Usopp the Great has accepted your quest!',
+          '🎯⭐ **Usopp the Great has accepted your quest!**',
           '',
-          `I’m queuing a review for **${owner}/${repo}** PR #${prNumber}.`,
-          'I’ll fire my comments straight onto the PR in a moment—BANG!',
+          `🏹 Queuing a review for **${owner}/${repo}** PR #${prNumber}.`,
+          '💥 I’ll fire my comments straight onto the PR in a moment—BANG!',
           '',
-          `PR: https://github.com/${owner}/${repo}/pull/${prNumber}`,
+          `🔗 PR: https://github.com/${owner}/${repo}/pull/${prNumber}`,
         ].join('\n'),
       };
     }
@@ -152,12 +149,104 @@ export class ReviewController implements OnModuleInit {
     return {
       type: 'message',
       text: [
-        'Shield up! Usopp is reading the battlefield!',
+        '🛡️🎯 **Shield up! Usopp is reading the battlefield!**',
         '',
-        `I’m scanning **${owner}/${repo}** PR #${prNumber} for review comments.`,
-        'If something’s unfair or nonsense, I’ll clap back on the PR thread.',
+        `🔍 Scanning **${owner}/${repo}** PR #${prNumber} for review comments.`,
+        '💬 If something’s unfair or nonsense, I’ll clap back on the PR thread.',
         '',
-        `PR: https://github.com/${owner}/${repo}/pull/${prNumber}`,
+        `🔗 PR: https://github.com/${owner}/${repo}/pull/${prNumber}`,
+      ].join('\n'),
+    };
+  }
+
+  @Post('nami/pr')
+  @HttpCode(200)
+  namiReviewPullRequest(
+    @Body() body: ReviewPRRequest,
+    @Headers() headers: Record<string, string>,
+  ) {
+    this.logger.log(`Nami request headers: ${JSON.stringify(headers)}`);
+    this.logger.log(`Nami request body: ${JSON.stringify(body)}`);
+
+    const rawText = typeof body?.text === 'string' ? body.text.trim() : '';
+
+    const intentResult = this.parseIntentAndRemainder(rawText);
+    if (!intentResult) {
+      return {
+        type: 'message',
+        text: [
+          '🍊🧭 Nami reporting in!',
+          '',
+          'Start your message with **review**, then the PR URL:',
+          '',
+          '`review https://github.com/owner/repo/pull/123`',
+        ].join('\n'),
+      };
+    }
+
+    const { intent, remainder } = intentResult;
+    if (intent !== 'review') {
+      return {
+        type: 'message',
+        text: [
+          '🍊 Nami only handles PR reviews.',
+          '',
+          'Use **review** with a GitHub PR URL, for example:',
+          '`review https://github.com/owner/repo/pull/123`',
+        ].join('\n'),
+      };
+    }
+
+    const prUrl = this.extractPullRequestUrl(remainder);
+    if (!prUrl) {
+      return {
+        type: 'message',
+        text: [
+          '🍊🧭 Nami reporting in!',
+          '',
+          'I can’t spot a GitHub Pull Request link after **review**…',
+          '',
+          'Example:',
+          '`review https://github.com/owner/repo/pull/123`',
+        ].join('\n'),
+      };
+    }
+
+    let owner: string, repo: string, prNumber: number;
+    try {
+      ({ owner, repo, prNumber } = this.parsePullRequestUrl(prUrl));
+    } catch {
+      return {
+        type: 'message',
+        text: [
+          '🌊⚠️ That PR link does not look valid.',
+          '',
+          `Received: \`${prUrl}\``,
+          '',
+          'Use a clean URL like:',
+          'https://github.com/owner/repo/pull/123',
+        ].join('\n'),
+      };
+    }
+
+    const tkxUrl = this.configService.get<string>('tkx.url');
+    const tkxApiKey = this.configService.get<string>('tkx.apiKey');
+    if (!tkxUrl?.trim() || !tkxApiKey?.trim()) {
+      throw new BadRequestException(
+        'TokenX review is not configured (TKX_URL / TKX_API_KEY).',
+      );
+    }
+
+    void this.processNamiReviewInBackground(prUrl);
+    return {
+      type: 'message',
+      text: [
+        '⛵🍊 **Nami has set sail!**',
+        '',
+        `🧭 Queuing a review via TokenX for **${owner}/${repo}** PR #${prNumber}.`,
+        '🌊 Results will appear on the PR when the agent finishes.',
+        '',
+        `🔗 PR: https://github.com/${owner}/${repo}/pull/${prNumber}`,
       ].join('\n'),
     };
   }
@@ -312,18 +401,14 @@ export class ReviewController implements OnModuleInit {
       }
 
       const myLogin = await this.githubService.getAuthenticatedLogin();
-      const [reviewComments, issueComments, prReviews, priorReviews] = await Promise.all([
-        this.githubService.listPullRequestReviewComments(owner, repo, prNumber),
-        this.githubService.listIssueComments(owner, repo, prNumber),
-        this.githubService.listPullRequestReviews(owner, repo, prNumber),
-        this.githubService.countPullRequestReviewsByUser(
-          owner,
-          repo,
-          prNumber,
-          myLogin,
-        ),
-      ]);
-      const isFirstReview = priorReviews === 0;
+      const [reviewComments, issueComments, prReviews, botReviewHistory] =
+        await Promise.all([
+          this.githubService.listPullRequestReviewComments(owner, repo, prNumber),
+          this.githubService.listIssueComments(owner, repo, prNumber),
+          this.githubService.listPullRequestReviews(owner, repo, prNumber),
+          this.githubService.getBotReviewHistory(owner, repo, prNumber, myLogin),
+        ]);
+      const isFirstReview = botReviewHistory.count === 0;
 
       const {
         text: discussionText,
@@ -333,27 +418,7 @@ export class ReviewController implements OnModuleInit {
       const existingDiscussion =
         discussionText.length > 0 ? discussionText : undefined;
 
-      // Extract prior inline comments by this bot (all severities) for dedup + status table.
-      // Deduplicate by (path, line) — keep only the most recent comment per location so
-      // the AI never sees two entries for the same line and produces duplicate table rows.
-      const botCommentsByLocation = new Map<string, { review_comment_id: number; severity: 'critical' | 'high' | 'medium'; path: string; line: number | null; bodyExcerpt: string }>();
-      for (const c of reviewComments) {
-        if (c.user?.login !== myLogin || c.in_reply_to_id != null) continue;
-        const severity = this.parseSeverityFromCommentBody(c.body);
-        if (!severity) continue;
-        const key = `${c.path}:${c.line}`;
-        const existing = botCommentsByLocation.get(key);
-        if (!existing || c.id > existing.review_comment_id) {
-          botCommentsByLocation.set(key, {
-            review_comment_id: c.id,
-            severity,
-            path: c.path,
-            line: c.line,
-            bodyExcerpt: this.extractCommentBodyExcerpt(c.body),
-          });
-        }
-      }
-      const priorBotComments = [...botCommentsByLocation.values()];
+      const priorBotComments = extractPriorBotComments(reviewComments, myLogin);
 
       let reviewResult;
       let metrics;
@@ -372,14 +437,32 @@ export class ReviewController implements OnModuleInit {
         );
         metrics = metricsForIgnoredPatternFilesOnly(skippedPatchFilesForMetrics);
       } else {
+        const { files, incrementalReview, sinceReviewSha } =
+          await resolveIncrementalReviewFiles(
+            this.githubService,
+            owner,
+            repo,
+            prNumber,
+            prData.head.sha,
+            myLogin,
+            reviewableFiles,
+            priorBotComments,
+            !isFirstReview,
+            this.logger,
+            botReviewHistory.latestCommitSha,
+          );
+
         const rv = await this.reviewService.reviewChanges({
           prTitle: prData.title,
           prDescription: prData.body || '',
           baseBranch: prData.base.ref,
           headBranch: prData.head.ref,
-          files: reviewableFiles,
+          files,
           ...(existingDiscussion ? { existingDiscussion } : {}),
           ...(priorBotComments.length ? { priorBotComments } : {}),
+          isReReview: !isFirstReview,
+          ...(prData.authorLogin ? { prAuthorLogin: prData.authorLogin } : {}),
+          ...(incrementalReview ? { incrementalReview, sinceReviewSha } : {}),
         });
         reviewResult = rv.result;
         metrics = rv.metrics;
@@ -425,6 +508,44 @@ export class ReviewController implements OnModuleInit {
     } catch (error: any) {
       this.logger.error(
         `Failed background review for ${owner}/${repo} PR #${prNumber}: ${error?.message || error}`,
+        error?.stack,
+      );
+    }
+  }
+
+  private async processNamiReviewInBackground(prUrl: string) {
+    const tkxUrl = this.configService.get<string>('tkx.url')?.trim();
+    const tkxApiKey = this.configService.get<string>('tkx.apiKey')?.trim();
+    if (!tkxUrl || !tkxApiKey) {
+      this.logger.error('TKX_URL or TKX_API_KEY is not configured');
+      return;
+    }
+
+    try {
+      this.logger.log(`Calling TokenX review for ${prUrl}`);
+      const response = await fetch(tkxUrl, {
+        method: 'POST',
+        headers: {
+          'x-api-key': tkxApiKey,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ pr_url: prUrl }),
+      });
+
+      const responseText = await response.text();
+      if (!response.ok) {
+        this.logger.error(
+          `TokenX review failed (${response.status}) for ${prUrl}: ${responseText}`,
+        );
+        return;
+      }
+
+      this.logger.log(
+        `TokenX review accepted for ${prUrl}${responseText ? `: ${responseText.slice(0, 500)}` : ''}`,
+      );
+    } catch (error: any) {
+      this.logger.error(
+        `TokenX review request failed for ${prUrl}: ${error?.message || error}`,
         error?.stack,
       );
     }
@@ -615,23 +736,6 @@ export class ReviewController implements OnModuleInit {
   }
 
   /** Parses the severity label from a bot-formatted inline comment body. */
-  private parseSeverityFromCommentBody(body: string): 'critical' | 'high' | 'medium' | null {
-    if (body.startsWith(SEVERITY_BADGE_CRITICAL)) return 'critical';
-    if (body.startsWith(SEVERITY_BADGE_HIGH)) return 'high';
-    if (body.startsWith(SEVERITY_BADGE_MEDIUM)) return 'medium';
-    return null;
-  }
-
-  /**
-   * Strips the severity badge header (first line + blank line) from a bot comment body
-   * and returns a short excerpt for use in prompts.
-   */
-  private extractCommentBodyExcerpt(body: string): string {
-    const lines = body.split('\n');
-    const withoutBadge = lines.slice(2).join('\n');
-    return withoutBadge.slice(0, 200).trim();
-  }
-
   private isGithubPullRequestUrl(candidate: string): boolean {
     try {
       const u = new URL(candidate);

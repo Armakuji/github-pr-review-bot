@@ -61,9 +61,15 @@ In JSON, the field **keyChanges** is an array of the most significant changes in
 
 If the PR contains no meaningful before→after changes (e.g. it is purely additive), set **keyChanges** to an empty array \`[]\`.
 
+## Review Sender (always include)
+Add a **reviewSender** field: one short, playful, good-natured sentence that introduces the PR author by GitHub login (\`@username\`) and sets a fun tone before the technical review. Be warm and encouraging — never insulting or sarcastic at the author's expense. Vary the wording each time.
+Example: "This is @kraiwich-k, the hardest-working person around! Time to give him a seriously tough review!!"
+
 ## Output format
-Respond ONLY with valid JSON — no markdown fences, no prose outside the JSON:
+Respond ONLY with valid JSON — no markdown fences, no prose outside the JSON.
+**JSON string rules:** every value must be valid JSON. Escape internal double quotes as \`\\"\`, use \`\\n\` for line breaks (never literal newlines inside strings), and avoid unescaped backslashes. Keep \`reviewSender\` and \`summary\` on one line each when possible.
 {
+  "reviewSender": "One playful intro sentence mentioning @author",
   "summary": "2–4 sentence overall assessment: what the PR does, general quality, and the most important concern if any",
   "whatsGood": "- First genuine positive\\n- Second genuine positive",
   "keyChanges": [

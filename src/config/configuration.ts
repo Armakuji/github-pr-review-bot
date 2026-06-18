@@ -15,6 +15,10 @@ export default () => ({
      */
     autoApproveBranchRoutes: process.env.AUTO_APPROVE_BRANCH_ROUTES || '',
   },
+  tkx: {
+    url: process.env.TKX_URL,
+    apiKey: process.env.TKX_API_KEY,
+  },
   logStash: {
     /** IANA timezone for timestamps and monthly log file name (default Asia/Bangkok, +07:00). */
     timeZone: process.env.LOGSTASH_TIMEZONE || 'Asia/Bangkok',
