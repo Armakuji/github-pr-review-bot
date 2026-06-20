@@ -10,6 +10,11 @@ export interface PullRequestFile {
 export interface PullRequestFilesForReview {
   reviewableFiles: PullRequestFile[];
   /**
+   * True when the PR has zero file changes at all — no diff to review.
+   * Auto-approve immediately without invoking the LLM.
+   */
+  zeroFilesChanged: boolean;
+  /**
    * True when every changed file that has a diff (not removed) matches `IGNORE_PATTERNS` only —
    * there is no other file left for the LLM to review.
    */
@@ -19,6 +24,15 @@ export interface PullRequestFilesForReview {
    * Empty otherwise.
    */
   ignoredPatternFilesWithPatch: PullRequestFile[];
+  /**
+   * When `reviewableFiles` is empty and `onlyIgnoredPatternFiles` is false: files that had a patch
+   * but were excluded from LLM review (for metrics / log stash).
+   */
+  skippedPatchFilesForMetrics: PullRequestFile[];
+  /**
+   * When `reviewableFiles` is empty and `onlyIgnoredPatternFiles` is false: short reason for the PR comment.
+   */
+  noReviewableFilesSummary?: string;
 }
 
 export type Severity = 'critical' | 'high' | 'medium';
@@ -43,6 +57,20 @@ export interface ReviewReplyToIssueComment {
   body: string;
 }
 
+export interface PriorIssueStatus {
+  review_comment_id: number;
+  severity: Severity;
+  title: string;
+  resolved: boolean;
+  /**
+   * True when the PR author explicitly deferred the issue (e.g. "not for this PR",
+   * "initial purpose"). The issue is real but intentionally skipped for this iteration.
+   * Treated as acceptable for approval (⚠️ Pass with condition) rather than a blocker.
+   */
+  deferredByAuthor?: boolean;
+  status_note?: string;
+}
+
 export interface ReviewResult {
   summary: string;
   comments: ReviewComment[];
@@ -52,6 +80,8 @@ export interface ReviewResult {
     high: number;
     medium: number;
   };
+  /** Status of prior bot critical/high inline comments (follow-up reviews only). */
+  priorIssuesStatus?: PriorIssueStatus[];
   /** Posted after the main review via GitHub reply APIs when present. */
   repliesToReviewComments?: ReviewReplyToReviewComment[];
   repliesToIssueComments?: ReviewReplyToIssueComment[];
@@ -71,5 +101,15 @@ export interface GithubPullReviewComment {
 export interface GithubIssueComment {
   id: number;
   body: string;
+  user: { login: string } | null;
+}
+
+export type PrReviewState = 'APPROVED' | 'CHANGES_REQUESTED' | 'DISMISSED' | 'COMMENTED' | 'PENDING';
+
+/** A submitted PR review (verdict + summary body). */
+export interface GithubPullRequestReview {
+  id: number;
+  body: string;
+  state: PrReviewState;
   user: { login: string } | null;
 }

@@ -3,10 +3,13 @@ import { GithubService } from 'src/github/github.service';
 import { ReviewService } from 'src/review/review.service';
 import { LogStashService } from 'src/shared/services/log-stash.service';
 import { buildPrDiscussionContext } from 'src/review/utils/build-pr-discussion-context.util';
+import { extractPriorBotComments } from 'src/review/utils/extract-prior-bot-comments.util';
+import { resolveIncrementalReviewFiles } from 'src/review/utils/resolve-incremental-review-files.util';
 import {
   buildInstantApproveIgnoredOnlyReviewResult,
   metricsForIgnoredPatternFilesOnly,
 } from 'src/review/utils/instant-approve-ignored-only.util';
+import { buildNoReviewableFilesReviewResult } from 'src/review/utils/no-reviewable-files.util';
 import { PullRequestEvent, IssueCommentEvent } from 'src/webhook/interfaces/webhook-event.interface';
 
 @Injectable()
@@ -37,6 +40,8 @@ export class WebhookService {
       reviewableFiles,
       onlyIgnoredPatternFiles,
       ignoredPatternFilesWithPatch,
+      skippedPatchFilesForMetrics,
+      noReviewableFilesSummary,
     } = await this.githubService.getPullRequestFilesForReview(
       owner,
       repo,
@@ -48,32 +53,32 @@ export class WebhookService {
         `PR #${prNumber}: only IGNORE_PATTERNS files with diffs; auto-approving`,
       );
     } else if (reviewableFiles.length === 0) {
-      this.logger.log(`No reviewable files in PR #${prNumber}`);
-      return;
+      this.logger.log(
+        `No reviewable files in PR #${prNumber}: ${noReviewableFilesSummary ?? 'skipped'}`,
+      );
     } else {
       this.logger.log(`Reviewing ${reviewableFiles.length} file(s)...`);
     }
 
     const myLogin = await this.githubService.getAuthenticatedLogin();
-    const [reviewComments, issueComments, priorReviews] = await Promise.all([
-      this.githubService.listPullRequestReviewComments(owner, repo, prNumber),
-      this.githubService.listIssueComments(owner, repo, prNumber),
-      this.githubService.countPullRequestReviewsByUser(
-        owner,
-        repo,
-        prNumber,
-        myLogin,
-      ),
-    ]);
-    const isFirstReview = priorReviews === 0;
+    const [reviewComments, issueComments, prReviews, botReviewHistory] =
+      await Promise.all([
+        this.githubService.listPullRequestReviewComments(owner, repo, prNumber),
+        this.githubService.listIssueComments(owner, repo, prNumber),
+        this.githubService.listPullRequestReviews(owner, repo, prNumber),
+        this.githubService.getBotReviewHistory(owner, repo, prNumber, myLogin),
+      ]);
+    const isFirstReview = botReviewHistory.count === 0;
 
     const {
       text: discussionText,
       allowedReviewCommentIds,
       allowedIssueCommentIds,
-    } = buildPrDiscussionContext(reviewComments, issueComments);
+    } = buildPrDiscussionContext(reviewComments, issueComments, prReviews);
     const existingDiscussion =
       discussionText.length > 0 ? discussionText : undefined;
+
+    const priorBotComments = extractPriorBotComments(reviewComments, myLogin);
 
     let reviewResult;
     let metrics;
@@ -82,14 +87,39 @@ export class WebhookService {
       metrics = metricsForIgnoredPatternFilesOnly(
         ignoredPatternFilesWithPatch,
       );
+    } else if (reviewableFiles.length === 0) {
+      reviewResult = buildNoReviewableFilesReviewResult(
+        noReviewableFilesSummary ??
+          'No line-level diff was available for automated review.',
+      );
+      metrics = metricsForIgnoredPatternFilesOnly(skippedPatchFilesForMetrics);
     } else {
+      const { files, incrementalReview, sinceReviewSha } =
+        await resolveIncrementalReviewFiles(
+          this.githubService,
+          owner,
+          repo,
+          prNumber,
+          pull_request.head.sha,
+          myLogin,
+          reviewableFiles,
+          priorBotComments,
+          !isFirstReview,
+          this.logger,
+          botReviewHistory.latestCommitSha,
+        );
+
       const rv = await this.reviewService.reviewChanges({
         prTitle: pull_request.title,
         prDescription: pull_request.body || '',
         baseBranch: pull_request.base.ref,
         headBranch: pull_request.head.ref,
-        files: reviewableFiles,
+        files,
         ...(existingDiscussion ? { existingDiscussion } : {}),
+        ...(priorBotComments.length ? { priorBotComments } : {}),
+        isReReview: !isFirstReview,
+        ...(pull_request.user.login ? { prAuthorLogin: pull_request.user.login } : {}),
+        ...(incrementalReview ? { incrementalReview, sinceReviewSha } : {}),
       });
       reviewResult = rv.result;
       metrics = rv.metrics;
@@ -153,6 +183,8 @@ export class WebhookService {
       reviewableFiles,
       onlyIgnoredPatternFiles,
       ignoredPatternFilesWithPatch,
+      skippedPatchFilesForMetrics,
+      noReviewableFilesSummary,
     } = await this.githubService.getPullRequestFilesForReview(
       owner,
       repo,
@@ -164,32 +196,32 @@ export class WebhookService {
         `PR #${prNumber}: only IGNORE_PATTERNS files with diffs; auto-approving`,
       );
     } else if (reviewableFiles.length === 0) {
-      this.logger.log(`No reviewable files in PR #${prNumber}`);
-      return;
+      this.logger.log(
+        `No reviewable files in PR #${prNumber}: ${noReviewableFilesSummary ?? 'skipped'}`,
+      );
     } else {
       this.logger.log(`Reviewing ${reviewableFiles.length} file(s)...`);
     }
 
     const myLogin = await this.githubService.getAuthenticatedLogin();
-    const [reviewComments, issueComments, priorReviews] = await Promise.all([
-      this.githubService.listPullRequestReviewComments(owner, repo, prNumber),
-      this.githubService.listIssueComments(owner, repo, prNumber),
-      this.githubService.countPullRequestReviewsByUser(
-        owner,
-        repo,
-        prNumber,
-        myLogin,
-      ),
-    ]);
-    const isFirstReview = priorReviews === 0;
+    const [reviewComments, issueComments, prReviews, botReviewHistory] =
+      await Promise.all([
+        this.githubService.listPullRequestReviewComments(owner, repo, prNumber),
+        this.githubService.listIssueComments(owner, repo, prNumber),
+        this.githubService.listPullRequestReviews(owner, repo, prNumber),
+        this.githubService.getBotReviewHistory(owner, repo, prNumber, myLogin),
+      ]);
+    const isFirstReview = botReviewHistory.count === 0;
 
     const {
       text: discussionText,
       allowedReviewCommentIds,
       allowedIssueCommentIds,
-    } = buildPrDiscussionContext(reviewComments, issueComments);
+    } = buildPrDiscussionContext(reviewComments, issueComments, prReviews);
     const existingDiscussion =
       discussionText.length > 0 ? discussionText : undefined;
+
+    const priorBotComments = extractPriorBotComments(reviewComments, myLogin);
 
     let reviewResult;
     let metrics;
@@ -198,14 +230,39 @@ export class WebhookService {
       metrics = metricsForIgnoredPatternFilesOnly(
         ignoredPatternFilesWithPatch,
       );
+    } else if (reviewableFiles.length === 0) {
+      reviewResult = buildNoReviewableFilesReviewResult(
+        noReviewableFilesSummary ??
+          'No line-level diff was available for automated review.',
+      );
+      metrics = metricsForIgnoredPatternFilesOnly(skippedPatchFilesForMetrics);
     } else {
+      const { files, incrementalReview, sinceReviewSha } =
+        await resolveIncrementalReviewFiles(
+          this.githubService,
+          owner,
+          repo,
+          prNumber,
+          prData.head.sha,
+          myLogin,
+          reviewableFiles,
+          priorBotComments,
+          !isFirstReview,
+          this.logger,
+          botReviewHistory.latestCommitSha,
+        );
+
       const rv = await this.reviewService.reviewChanges({
         prTitle: prData.title,
         prDescription: prData.body || '',
         baseBranch: prData.base.ref,
         headBranch: prData.head.ref,
-        files: reviewableFiles,
+        files,
         ...(existingDiscussion ? { existingDiscussion } : {}),
+        ...(priorBotComments.length ? { priorBotComments } : {}),
+        isReReview: !isFirstReview,
+        ...(prData.authorLogin ? { prAuthorLogin: prData.authorLogin } : {}),
+        ...(incrementalReview ? { incrementalReview, sinceReviewSha } : {}),
       });
       reviewResult = rv.result;
       metrics = rv.metrics;
